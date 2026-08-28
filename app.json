@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Dive Log Transfer",
+    "slug": "dive-log-transfer",
+    "version": "0.1.0",
+    "scheme": "divelogtransfer",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.divelogtransfer.app",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.divelogtransfer.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0B3B46"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

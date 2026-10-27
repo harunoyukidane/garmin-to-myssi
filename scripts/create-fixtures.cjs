@@ -1,0 +1,11 @@
+const fs = require('node:fs');
+const { Encoder } = require('@garmin/fitsdk');
+const directory = 'tests/fixtures'; fs.mkdirSync(directory, { recursive: true });
+const encoder = new Encoder();
+const startTime = new Date('2026-05-23T00:00:00Z'), timestamp = new Date('2026-05-23T00:30:00Z');
+encoder.writeMesg({ mesgNum: 0, type: 'activity', manufacturer: 'garmin', product: 1, serialNumber: 123, timeCreated: startTime });
+encoder.writeMesg({ mesgNum: 18, messageIndex: 0, sport: 'diving', subSport: 'singleGasDiving', startTime, timestamp, totalTimerTime: 1800 });
+encoder.writeMesg({ mesgNum: 268, referenceMesg: 'session', referenceIndex: 0, timestamp, maxDepth: 24.3, bottomTime: 1740 });
+encoder.writeMesg({ mesgNum: 20, timestamp: new Date('2026-05-23T00:10:00Z'), depth: 20, temperature: 28 });
+fs.writeFileSync(`${directory}/synthetic-dive.fit`, encoder.close());
+fs.writeFileSync(`${directory}/dive-review.csv`, 'startTime,durationSec,maxDepthM,waterTempC,locationName,notes\r\n2026-05-23T00:00:00Z,1740,24.3,28,House Reef,"CSV copy of synthetic FIT"\r\n2026-05-24T01:00:00Z,1800,18,0,"礁, Reef","Line one\nLine two"\r\n');

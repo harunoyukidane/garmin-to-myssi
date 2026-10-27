@@ -1,0 +1,4 @@
+startTime,durationSec,maxDepthM,waterTempC,locationName,notes
+2026-05-23T00:00:00Z,1740,24.3,28,House Reef,"CSV copy of synthetic FIT"
+2026-05-24T01:00:00Z,1800,18,0,"礁, Reef","Line one
+Line two"

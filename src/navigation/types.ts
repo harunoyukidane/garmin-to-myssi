@@ -1,20 +1,10 @@
-import { DiveRecord, TripConfig } from "../../shared/types";
-
 export type RootStackParamList = {
-  SignIn: undefined;
-  TripSetup: undefined;
-  DiveList: {
-    tripConfig: TripConfig;
-  };
-  DiveDetail: {
-    dive: DiveRecord;
-  };
-  FieldCorrection: {
-    dive: DiveRecord;
-    field: "maxDepthM" | "durationSec" | "locationName" | "waterTempC" | "notes";
-  };
-  Export: {
-    tripConfig: TripConfig;
-    dives: DiveRecord[];
-  };
+  Trips: undefined;
+  TripSetup: { tripId?: string } | undefined;
+  DiveList: { tripId: string };
+  Import: { tripId: string };
+  DiveDetail: { tripId: string; diveId: string };
+  FieldCorrection: { tripId: string; diveId: string; field: import('../../shared/model').EditableField };
+  SsiTransfer: { tripId: string; diveId?: string };
+  Export: { tripId: string };
 };

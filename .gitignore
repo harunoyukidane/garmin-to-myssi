@@ -9,3 +9,8 @@ yarn-debug.log*
 yarn-error.log*
 expo-start.log
 expo-start.err.log
+
+# Private Android release signing credentials
+android/release.keystore
+android/signing.properties
+.android-tmp/

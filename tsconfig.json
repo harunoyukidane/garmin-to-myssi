@@ -12,9 +12,6 @@
       "@/*": [
         "src/*"
       ],
-      "@backend/*": [
-        "backend/*"
-      ],
       "@shared/*": [
         "shared/*"
       ]
@@ -23,8 +20,7 @@
   "include": [
     "App.tsx",
     "src",
-    "shared",
-    "backend"
+    "shared"
   ],
   "extends": "expo/tsconfig.base"
 }

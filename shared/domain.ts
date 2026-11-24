@@ -1,4 +1,5 @@
-import { Dive, EditableField, ImportedDive, ImportReport, Measurements, NumberedDive, Trip, TripConfig, newId } from './model';
+import { Dive, EditableField, ImportedDive, ImportReport, Measurements, SequencedDive, Trip, TripConfig, newId } from './model';
+import { diveInstant, diveLocalTime, validTimeZone } from './diveTime';
 
 export function validDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
@@ -7,18 +8,16 @@ export function validateConfig(config: TripConfig): string[] {
   const errors: string[] = [];
   if (!validDate(config.tripStartDate) || !validDate(config.tripEndDate)) errors.push('Enter real dates as YYYY-MM-DD.');
   if (config.tripStartDate > config.tripEndDate) errors.push('End date must be on or after start date.');
-  if (!Number.isSafeInteger(config.ssiStartDiveNumber) || config.ssiStartDiveNumber < 1) errors.push('First SSI number must be a positive whole number.');
+  if (config.timeZoneOverride && !validTimeZone(config.timeZoneOverride)) errors.push('Enter a valid geographic time zone, such as Asia/Singapore.');
+  if (config.destinationTimeZone && !validTimeZone(config.destinationTimeZone)) errors.push('Select a destination with a valid time zone.');
   if (!Number.isInteger(config.utcOffsetMinutes) || config.utcOffsetMinutes < -720 || config.utcOffsetMinutes > 840) errors.push('UTC offset must be whole minutes from -720 to 840.');
   return errors;
-}
-export function localDateTime(instant: string, offset: number): string {
-  return new Date(Date.parse(instant) + offset * 60000).toISOString().slice(0, 19).replace('T', ' ');
 }
 export function offsetLabel(minutes: number): string {
   return `UTC${minutes < 0 ? '-' : '+'}${String(Math.floor(Math.abs(minutes) / 60)).padStart(2, '0')}:${String(Math.abs(minutes) % 60).padStart(2, '0')}`;
 }
 export function effective(dive: Dive): Dive {
-  const result = { ...dive, ...dive.original };
+  const result = { ...dive, ...dive.original, locationName: dive.original.locationName || dive.enrichment?.locationName };
   for (const field of Object.keys(dive.corrections) as EditableField[]) {
     const value = dive.corrections[field];
     (result as unknown as Record<string, unknown>)[field] = value === null ? undefined : value;
@@ -26,13 +25,12 @@ export function effective(dive: Dive): Dive {
   return result;
 }
 export function inTrip(dive: ImportedDive, config: TripConfig): boolean {
-  const date = localDateTime(dive.startTime, config.utcOffsetMinutes).slice(0, 10);
+  const date = diveLocalTime(dive, config).slice(0, 10);
   return date >= config.tripStartDate && date <= config.tripEndDate;
 }
-export function tripDives(trip: Trip): NumberedDive[] {
-  if (!Number.isSafeInteger(trip.config.ssiStartDiveNumber + trip.dives.length)) throw new Error('SSI numbers exceed the supported whole number range.');
-  return trip.dives.filter(d => inTrip(d, trip.config)).sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime) || a.id.localeCompare(b.id))
-    .map((dive, index) => ({ ...effective(dive), ssiDiveNumber: trip.config.ssiStartDiveNumber + index }));
+export function tripDives(trip: Trip): SequencedDive[] {
+  return trip.dives.filter(d => inTrip(d, trip.config)).sort((a, b) => Date.parse(diveInstant(a, trip.config)) - Date.parse(diveInstant(b, trip.config)) || a.id.localeCompare(b.id))
+    .map((dive, index) => ({ ...effective(dive), sequence: index + 1 }));
 }
 export function measurements(d: ImportedDive): Measurements {
   return { durationSec: d.durationSec, maxDepthM: d.maxDepthM, waterTempC: d.waterTempC, maxWaterTempC: d.maxWaterTempC, locationName: d.locationName, notes: d.notes };
@@ -40,14 +38,21 @@ export function measurements(d: ImportedDive): Measurements {
 function sameMeasurements(a: Measurements, b: Measurements): boolean {
   return a.durationSec === b.durationSec && a.maxDepthM === b.maxDepthM && a.waterTempC === b.waterTempC;
 }
+function sameSourceValues(existing: Dive, incoming: ImportedDive): boolean {
+  const fields = ['durationSec', 'maxDepthM', 'waterTempC', 'maxWaterTempC', 'locationName', 'notes'] as const;
+  if (fields.some(field => existing.original[field] !== incoming[field])) return false;
+  const a = existing.garminStats || {}, b = incoming.garminStats || {};
+  return Object.keys({ ...a, ...b }).every(key => a[key as keyof typeof a] === b[key as keyof typeof b]);
+}
 export function mergeDives(trip: Trip, records: ImportedDive[], fileId: string, report: ImportReport, allowSameTime = false): Trip {
   const dives = [...trip.dives];
   for (const record of records) {
     if (!Number.isFinite(Date.parse(record.startTime))) { report.failures.push('Invalid dive start time.'); continue; }
-    const byId = record.sourceId && dives.find(d => d.sourceId === record.sourceId);
+    const byId = record.garmin ? dives.find(d => d.garmin?.accountId === record.garmin!.accountId && d.garmin?.activityId === record.garmin!.activityId && d.garmin?.diveId === record.garmin!.diveId)
+      : record.sourceId && dives.find(d => d.sourceId === record.sourceId);
     const atTime = dives.filter(d => d.startTime === record.startTime);
     if (byId) {
-      if (byId.startTime !== record.startTime || (byId.diveKind || 'scuba') !== (record.diveKind || 'scuba') || !sameMeasurements(byId.original, measurements(record))) report.conflicts.push(`Activity ${record.sourceId} has different imported values; existing dive kept. Remove the trip and reimport to replace its source values.`);
+      if (byId.startTime !== record.startTime || (byId.diveKind || 'scuba') !== (record.diveKind || 'scuba') || !sameSourceValues(byId, record)) report.conflicts.push(`Activity ${record.garmin?.activityId || record.sourceId} has different imported values; existing dive kept. Review the original source before making corrections.`);
       else report.duplicates++;
       continue;
     }
@@ -76,28 +81,7 @@ export function correctDive(trip: Trip, diveId: string, field: EditableField, va
     audit: [...trip.audit, { diveId, field, before: effective(dive)[field] ?? null, after: value, at }].slice(-500) };
 }
 export function missingFields(d: ImportedDive): string[] {
-  return [d.maxDepthM === undefined ? 'depth' : '', d.durationSec === undefined ? 'duration' : '', !d.locationName?.trim() ? 'location' : ''].filter(Boolean);
-}
-function csvCell(value: string | number | undefined): string {
-  let text = value === undefined ? '' : String(value);
-  if (typeof value === 'string' && /^[\s]*[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-export function generateExport(trip: Trip, format: 'csv' | 'json', at = new Date()): { fileName: string; mime: string; body: string } {
-  const dives = tripDives(trip);
-  if (!dives.length) throw new Error('No dives inside this trip to export.');
-  const fileName = `dive-review-${trip.config.tripStartDate}-${trip.config.tripEndDate}-${at.toISOString().replace(/[:.]/g, '-')}.${format}`;
-  if (format === 'json') return { fileName, mime: 'application/json', body: JSON.stringify({ schemaVersion: 1, exportedAt: at.toISOString(), trip: trip.config,
-    dives: dives.map(d => ({ sourceId: d.sourceId, startTime: d.startTime, diveKind: d.diveKind, ssiDiveNumber: d.ssiDiveNumber, ...measurements(d), garminStats: d.garminStats, missingFields: missingFields(d) })) }, null, 2) };
-  const header = 'diveNumber,diveDate,diveTime,utcOffset,maxDepthM,bottomTimeMinutes,waterTempC,location,notes,maxWaterTempC,avgDepthM,surfaceIntervalSec,latitude,longitude,avgHeartRateBpm,maxHeartRateBpm,endCnsPercent,oxygenToxicityOtu,waterType';
-  const rows = dives.map(d => {
-    const local = localDateTime(d.startTime, trip.config.utcOffsetMinutes);
-    return [d.ssiDiveNumber, local.slice(0, 10), local.slice(11), offsetLabel(trip.config.utcOffsetMinutes), d.maxDepthM,
-      d.durationSec === undefined ? undefined : Number((d.durationSec / 60).toFixed(2)), d.waterTempC, d.locationName, d.notes,
-      d.maxWaterTempC, d.garminStats?.avgDepthM, d.garminStats?.surfaceIntervalSec, d.garminStats?.latitude, d.garminStats?.longitude,
-      d.garminStats?.avgHeartRateBpm, d.garminStats?.maxHeartRateBpm, d.garminStats?.endCnsPercent, d.garminStats?.oxygenToxicityOtu, d.garminStats?.waterType].map(csvCell).join(',');
-  });
-  return { fileName, mime: 'text/csv', body: '\uFEFF' + [header, ...rows].join('\r\n') };
+  return [d.maxDepthM === undefined || !Number.isFinite(d.maxDepthM) || d.maxDepthM < 0 ? 'depth' : '', d.durationSec === undefined || !Number.isFinite(d.durationSec) || Math.round(d.durationSec / 60) < 1 ? 'duration' : ''].filter(Boolean);
 }
 export function base64Bytes(base64: string): Uint8Array {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';

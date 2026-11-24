@@ -2,6 +2,8 @@ param([switch]$PrepareOnly, [switch]$UseWindowsTrustStore, [switch]$VerifyOnly)
 $ErrorActionPreference = 'Stop'
 $projectDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $androidDirectory = Join-Path $projectDirectory 'android'
+$releaseVersion = (Get-Content -LiteralPath (Join-Path $projectDirectory 'package.json') -Raw | ConvertFrom-Json).version
+$releaseCode = (Get-Content -LiteralPath (Join-Path $projectDirectory 'app.json') -Raw | ConvertFrom-Json).expo.android.versionCode
 $keyPath = Join-Path $androidDirectory 'release.keystore'
 $signingPath = Join-Path $androidDirectory 'signing.properties'
 if (-not (Test-Path -LiteralPath $signingPath)) {
@@ -50,9 +52,10 @@ $buildToolsDirectory = Join-Path $env:ANDROID_HOME 'build-tools\35.0.0'
 if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed.' }
 $permissions = & (Join-Path $buildToolsDirectory 'aapt.exe') dump permissions $apkPath
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK permissions.' }
-if ($permissions -match 'android.permission.INTERNET') { throw 'Release APK unexpectedly requests internet permission.' }
+if (-not ($permissions -match 'android.permission.INTERNET')) { throw 'Release APK needs INTERNET permission for optional Garmin sync.' }
 $badging = & (Join-Path $buildToolsDirectory 'aapt.exe') dump badging $apkPath
 if ($LASTEXITCODE -ne 0 -or -not ($badging -match "package: name='com.divelogtransfer.app'")) { throw 'Unexpected APK package.' }
+if (-not ($badging -match "versionName='$([regex]::Escape($releaseVersion))'") -or -not ($badging -match "versionCode='$releaseCode'")) { throw 'APK version does not match the release configuration.' }
 $badging | Select-String -Pattern '^package:','^sdkVersion:','^targetSdkVersion:','^native-code:'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::OpenRead($apkPath)
@@ -62,9 +65,9 @@ try {
 } finally { $archive.Dispose() }
 $outputDirectory = Join-Path $projectDirectory 'dist'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
-$deliverable = Join-Path $outputDirectory 'DiveLogTransfer-0.2.0.apk'
+$deliverable = Join-Path $outputDirectory "DiveLogTransfer-$releaseVersion.apk"
 Copy-Item -LiteralPath $apkPath -Destination $deliverable -Force
 $hash = (Get-FileHash -LiteralPath $deliverable -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath ($deliverable + '.sha256') -Value "$hash  DiveLogTransfer-0.2.0.apk"
+Set-Content -LiteralPath ($deliverable + '.sha256') -Value "$hash  $([System.IO.Path]::GetFileName($deliverable))"
 Write-Output "Verified standalone APK: $deliverable"
-Write-Output 'Signature valid; JavaScript bundled; no INTERNET permission.'
+Write-Output 'Signature valid; JavaScript bundled; INTERNET permission available for optional Garmin sync.'

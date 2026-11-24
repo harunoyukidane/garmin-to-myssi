@@ -8,6 +8,10 @@ export function appDirectory(): string {
 export async function ensureDirectories() {
   await FileSystem.makeDirectoryAsync(appDirectory(), { intermediates: true });
   await FileSystem.makeDirectoryAsync(`${appDirectory()}sources/`, { intermediates: true });
+  // Interrupted extraction directories contain no retained source references.
+  if (FileSystem.cacheDirectory) for (const name of await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory)) {
+    if (/^garmin-[a-z0-9-]+$/.test(name)) await FileSystem.deleteAsync(FileSystem.cacheDirectory + name, { idempotent: true }).catch(() => undefined);
+  }
 }
 export const repository = createRepository({
   exists: async name => (await FileSystem.getInfoAsync(appDirectory() + name)).exists,

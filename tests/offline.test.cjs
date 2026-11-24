@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Encoder } = require('@garmin/fitsdk');
-const { validDate, validateConfig, tripDives, mergeDives, correctDive, generateExport, base64Bytes, missingFields } = require('../shared/domain.ts');
+const { validDate, validateConfig, tripDives, mergeDives, correctDive, base64Bytes, missingFields } = require('../shared/domain.ts');
 const { csvRows, parseCsv, suggestMapping, parseTimestamp } = require('../shared/parsers/csv.ts');
 const { parseFit } = require('../shared/parsers/fit.ts');
 const { createRepository, decodeStore } = require('../shared/repository.ts');
@@ -23,16 +23,16 @@ function memoryFiles(initial = {}) {
     move: async (a, b) => { if (fail === 'move') throw Error('Interrupted'); values.set(b, values.get(a)); values.delete(a); }
   };
 }
-test('calendar validation rejects rollover dates and invalid numbering and offset', () => {
+test('calendar validation rejects rollover dates and legacy numbering and invalid offset', () => {
   assert.equal(validDate('2026-02-30'), false); assert.equal(validDate('2024-02-29'), true); assert.equal(validDate('05/23/2026'), false);
-  assert.ok(validateConfig({ ...config, ssiStartDiveNumber: 1.2 }).length);
+  assert.equal(validateConfig({ ...config, ssiStartDiveNumber: 1.2 }).length, 0);
   assert.ok(validateConfig({ ...config, utcOffsetMinutes: 841 }).length);
   assert.ok(validateConfig({ ...config, tripEndDate: '2026-05-22' }).length);
 });
 test('inclusive trip dates use trip offset and numbering sorts actual instants', () => {
   const trip = imported([record('2026-05-24T15:59:59.000Z'), record('2026-05-22T16:00:00.000Z'), record('2026-05-24T16:00:00.000Z'), record('2026-05-22T15:59:59.000Z')]);
   const dives = tripDives(trip); assert.equal(dives.length, 2);
-  assert.deepEqual(dives.map(d => d.ssiDiveNumber), [42, 43]);
+  assert.deepEqual(dives.map(d => d.sequence), [1, 2]);
   assert.equal(dives[0].startTime, '2026-05-22T16:00:00.000Z');
   assert.equal(tripDives({ ...trip, config: { ...config, tripEndDate: '2026-05-25' } }).length, 3);
 });
@@ -65,22 +65,10 @@ test('repeat imports and uncertain collisions preserve existing corrections', ()
 test('corrections validate numeric values, preserve zero/negative temperatures, and clear optional fields', () => {
   let trip = imported([record()]); const id = trip.dives[0].id;
   trip = correctDive(trip, id, 'waterTempC', -2); trip = correctDive(trip, id, 'locationName', null);
-  assert.equal(tripDives(trip)[0].waterTempC, -2); assert.ok(missingFields(tripDives(trip)[0]).includes('location'));
+  assert.equal(tripDives(trip)[0].waterTempC, -2); assert.ok(!missingFields(tripDives(trip)[0]).includes('location'));
   assert.equal(trip.dives[0].original.locationName, 'Reef'); assert.equal(trip.audit.length, 2);
   for (const value of [NaN, Infinity, -1, 0, null]) assert.throws(() => correctDive(trip, id, 'durationSec', value));
   assert.equal(tripDives(correctDive(trip, id, 'maxDepthM', 0))[0].maxDepthM, 0);
-});
-test('exports use saved corrections, explicit units, local time and safe spreadsheet text', () => {
-  let trip = imported([record(at, { notes: 'a,"b"\n礁' })]);
-  trip = correctDive(trip, trip.dives[0].id, 'durationSec', 61);
-  trip = correctDive(trip, trip.dives[0].id, 'locationName', '=HYPERLINK("bad")');
-  const csv = generateExport(trip, 'csv', new Date(at));
-  const rows = csvRows(csv.body); assert.equal(rows[1][0], '42'); assert.equal(rows[1][2], '08:00:00'); assert.equal(rows[1][5], '1.02');
-  assert.equal(rows[1][6], '0'); assert.ok(rows[1][7].startsWith("'=")); assert.equal(rows[1][8], 'a,"b"\n礁');
-  const json = JSON.parse(generateExport(trip, 'json').body);
-  assert.equal(json.dives[0].durationSec, 61); assert.equal(json.dives[0].locationName, '=HYPERLINK("bad")');
-  assert.equal(json.dives[0].raw, undefined); assert.equal(json.trip.utcOffsetMinutes, 480);
-  assert.throws(() => generateExport(makeTrip(), 'csv'), /No dives/);
 });
 test('repository persists and reloads complete records and serializes concurrent writes', async () => {
   const files = memoryFiles(); const repo = createRepository(files); await repo.load();
@@ -99,7 +87,7 @@ test('corrupt data never silently resets and future schemas cannot be overwritte
   const restored = await createRepository(memoryFiles({ 'store.json': 'bad', 'backup.json': backup })).load(); assert.equal(restored.data.trips.length, 1);
   await assert.rejects(createRepository(memoryFiles({ 'store.json': 'bad' })).load(), /preserved/);
   await assert.rejects(createRepository(memoryFiles({ 'pending.json': '{}' })).load(), /preserved/);
-  await assert.rejects(createRepository(memoryFiles({ 'store.json': '{"schemaVersion":2,"trips":[]}', 'backup.json': backup })).load(), /Unsupported/);
+  await assert.rejects(createRepository(memoryFiles({ 'store.json': '{"schemaVersion":3,"trips":[]}', 'backup.json': backup })).load(), /Unsupported/);
   assert.throws(() => decodeStore('{"schemaVersion":1,"trips":[{}]}'));
 });
 function fitFixture({ sport = 'diving', subSport = 'singleGasDiving', summary = true, lap = false } = {}) {
@@ -163,6 +151,18 @@ const { inflateSync, crc32: independentCrc } = require('node:zlib');
 const jsQR = require('jsqr');
 const { exportAllQr, qrFileName } = require('../shared/qrBatch.ts');
 
+test('gallery captions contain corrected location, trip sequence and local date without changing SSI payload', async () => {
+  let trip = imported([record()]);
+  trip = correctDive(trip, trip.dives[0].id, 'locationName', 'Coral reef');
+  let caption;
+  await exportAllQr(trip, async (_, base64, text) => {
+    caption = text;
+    const png = decodePng(base64);
+    assert.doesNotMatch(jsQR(png.rgba, png.width, png.height).data, /Coral reef|Dive 1/);
+  });
+  assert.match(caption, /^Dive 1\nCoral reef\n2026-05-23 08:00:00\n20.0 m · 30 min$/);
+});
+
 test('FIT preserves additional measurements and GPS while QR uses only supported fields', () => {
   const encoder = new Encoder(); const startTime = new Date(at), timestamp = new Date(Date.parse(at) + 1800000);
   encoder.writeMesg({ mesgNum: 0, type: 'activity', manufacturer: 'garmin', timeCreated: startTime });
@@ -181,16 +181,14 @@ test('FIT preserves additional measurements and GPS while QR uses only supported
   const trip = imported([dive]); const reloaded = decodeStore(JSON.stringify({ schemaVersion: 1, trips: [trip] })).trips[0];
   const payload = ssiPayload(tripDives(reloaded)[0], config);
   assert.match(payload, /watertemp_max_c:27/); assert.match(payload, /var_watertype_id:5/); assert.ok(!payload.includes('site:'));
-  assert.equal(JSON.parse(generateExport(reloaded, 'json').body).dives[0].garminStats.avgDepthM, 12.5);
-  assert.match(generateExport(reloaded, 'csv').body, /maxWaterTempC,avgDepthM,surfaceIntervalSec,latitude,longitude/);
 });
 
-test('batch QR export uses saved dive types, continues after individual failures and supports cancellation', async () => {
+test('batch QR export ignores legacy type overrides, continues after individual failures and supports cancellation', async () => {
   const trip = imported([record(), record('2026-05-23T01:00:00.000Z', { maxDepthM: undefined }), record('2026-05-23T02:00:00.000Z')]);
   trip.dives[0].ssiTypeOverride = 2;
   const saved = [], progress = [];
-  const result = await exportAllQr(trip, async (name, base64) => { saved.push(name); const png = decodePng(base64); assert.match(jsQR(png.rgba, png.width, png.height).data, /dive_type:(2|0)/); }, p => progress.push(p.processed));
-  assert.equal(result.total, 3); assert.equal(result.saved, 2); assert.equal(result.failures[0].diveNumber, 43);
+  const result = await exportAllQr(trip, async (name, base64) => { saved.push(name); const png = decodePng(base64); assert.match(jsQR(png.rgba, png.width, png.height).data, /dive_type:0/); }, p => progress.push(p.processed));
+  assert.equal(result.total, 3); assert.equal(result.saved, 2); assert.equal(result.failures[0].sequence, 2);
   assert.equal(progress.at(-1), 3); assert.equal(new Set(saved).size, 2);
   assert.match(qrFileName(42, at), /^ssi-dive-000042-[A-Za-z0-9]+\.png$/);
   let count = 0;
@@ -200,13 +198,13 @@ test('batch QR export uses saved dive types, continues after individual failures
   assert.equal(failed.saved, 0); assert.match(failed.failures[0].reason, /No storage/);
 });
 
-test('saved SSI overrides and number overflow are validated before persistence', () => {
+test('legacy SSI data stays loadable while old numbering and type choices are ignored', () => {
   const trip = imported([record()]); trip.dives[0].ssiTypeOverride = 4;
   const loaded = decodeStore(JSON.stringify({ schemaVersion: 1, trips: [trip] }));
-  assert.match(ssiPayload(tripDives(loaded.trips[0])[0], config), /dive_type:4/);
+  assert.match(ssiPayload(tripDives(loaded.trips[0])[0], config), /dive_type:0/);
   trip.dives[0].ssiTypeOverride = 3; assert.throws(() => decodeStore(JSON.stringify({ schemaVersion: 1, trips: [trip] })), /SSI dive type/);
   trip.dives[0].ssiTypeOverride = 0; trip.config = { ...config, ssiStartDiveNumber: Number.MAX_SAFE_INTEGER };
-  assert.throws(() => decodeStore(JSON.stringify({ schemaVersion: 1, trips: [trip] })), /whole number range/);
+  assert.equal(decodeStore(JSON.stringify({ schemaVersion: 1, trips: [trip] })).trips.length, 1);
 });
 function decodePng(base64) {
   const bytes = Buffer.from(base64, 'base64');
@@ -222,12 +220,12 @@ function decodePng(base64) {
 test('SSI QR payload carries corrected measurements and local time without identifiers or verification', () => {
   let trip = imported([record()]); trip = correctDive(trip, trip.dives[0].id, 'maxDepthM', 24.35); trip = correctDive(trip, trip.dives[0].id, 'durationSec', 1740);
   const payload = ssiPayload(tripDives(trip)[0], config);
-  assert.equal(payload, 'dive;noid;dive_type:0;divetime:29;datetime:202605230800;depth_m:24.4;user_firstname:;user_lastname:;watertemp_c:0');
+  assert.equal(payload, 'dive;noid;dive_type:0;divetime:29;datetime:202605230800;depth_m:24.4;user_firstname:;user_lastname:;watertemp_c:0;var_weather_id:1;var_entry_id:22;var_water_body_id:13;var_current_id:7;var_surface_id:11;var_divetype_id:24');
   assert.ok(!payload.includes('user_master_id')); assert.ok(!payload.includes('user_leader_id')); assert.ok(!payload.includes('site:'));
   assert.match(ssiPayload({ ...tripDives(trip)[0], diveKind: 'freedive' }, config), /dive_type:6/);
   assert.match(ssiPayload({ ...tripDives(trip)[0], diveKind: 'ccr' }, config), /dive_type:8/);
-  assert.match(ssiPayload(tripDives(trip)[0], config, 2), /dive_type:2/);
-  assert.throws(() => ssiPayload(tripDives(trip)[0], config, 99));
+  assert.match(ssiPayload({ ...tripDives(trip)[0], ssiTypeOverride: 2 }, config), /dive_type:0/);
+
   assert.throws(() => ssiPayload({ ...tripDives(trip)[0], durationSec: undefined }, config));
   assert.throws(() => ssiPayload({ ...tripDives(trip)[0], maxDepthM: undefined }, config));
 });
@@ -242,6 +240,52 @@ test('exported PNG QR images decode independently to the precise SSI payload', (
 });
 test('portable base64 writer matches standard encoding for every padding length', () => {
   for (let length = 0; length < 20; length++) { const bytes = Uint8Array.from({ length }, (_, i) => i * 13 & 255); assert.equal(bytesBase64(bytes), Buffer.from(bytes).toString('base64')); }
+});
+
+test('SSI conditions use recorded values before defaults and explicit dive amendments first', () => {
+  const dive = { ...tripDives(imported([record()]))[0], ssiConditions: { weather: 3, current: 8 }, ssiConditionOverrides: { weather: 2, surface: null }, ssiAirTempC: 0 };
+  const payload = ssiPayload(dive, config, { weather: 1, current: 7, entry: 21 });
+  assert.match(payload, /var_weather_id:2(?:;|$)/);
+  assert.match(payload, /var_current_id:8(?:;|$)/);
+  assert.match(payload, /var_entry_id:21(?:;|$)/);
+  assert.doesNotMatch(payload, /var_surface_id:/);
+  assert.match(payload, /airtemp_c:0(?:;|$)/);
+  assert.equal((payload.match(/var_weather_id:/g) || []).length, 1);
+  assert.throws(() => ssiPayload({ ...dive, ssiConditionOverrides: { entry: 999 } }, config), /Invalid SSI/);
+  assert.throws(() => ssiPayload({ ...dive, ssiAirTempC: NaN }, config), /air temperature/);
+});
+
+test('existing trips get independent default snapshots and persisted trips retain amendments', () => {
+  const loaded = decodeStore(JSON.stringify({ schemaVersion: 2, ssiDefaults: { weather: 3 }, trips: [imported([record()])] }));
+  assert.equal(loaded.trips[0].ssiDefaults.weather, 3);
+  loaded.ssiDefaults.weather = 2;
+  const reloaded = decodeStore(JSON.stringify(loaded));
+  assert.equal(reloaded.trips[0].ssiDefaults.weather, 3);
+  reloaded.trips[0].ssiDefaults.entry = 21;
+  reloaded.trips[0].ssiAirTempC = 31.5;
+  reloaded.trips[0].dives[0].ssiConditionOverrides = { current: 6 };
+  const persisted = decodeStore(JSON.stringify(reloaded));
+  assert.equal(persisted.trips[0].ssiDefaults.entry, 21);
+  assert.equal(persisted.trips[0].ssiAirTempC, 31.5);
+  assert.equal(persisted.trips[0].dives[0].ssiConditionOverrides.current, 6);
+  assert.throws(() => decodeStore(JSON.stringify({ ...loaded, ssiDefaults: { weather: '1' } })), /Invalid SSI/);
+  assert.throws(() => decodeStore(JSON.stringify({ ...loaded, trips: [{ ...loaded.trips[0], ssiAirTempC: 999 }] })), /air temperature/);
+});
+
+test('batch QR images carry trip settings, dive amendments and trip air temperature', async () => {
+  const trip = imported([record()]);
+  trip.ssiDefaults = { weather: 2, entry: 21 };
+  trip.ssiAirTempC = 31;
+  trip.dives[0].ssiConditionOverrides = { current: 6 };
+  const result = await require('../shared/qrBatch.ts').exportAllQr(trip, async (_, base64) => {
+    const png = decodePng(base64);
+    const payload = jsQR(png.rgba, png.width, png.height).data;
+    assert.match(payload, /var_weather_id:2(?:;|$)/);
+    assert.match(payload, /var_entry_id:21(?:;|$)/);
+    assert.match(payload, /var_current_id:6(?:;|$)/);
+    assert.match(payload, /airtemp_c:31(?:;|$)/);
+  });
+  assert.equal(result.saved, 1); assert.deepEqual(result.failures, []);
 });
 test('CSV apnea classification transfers as freediving while skydiving is excluded', () => {
   const text = 'Activity Type,startTime,durationSec,maxDepthM\nApnea,2026-05-23T00:00:00Z,180,15\nSky Diving,2026-05-23T01:00:00Z,180,15\nRunning,2026-05-23T02:00:00Z,180,15';

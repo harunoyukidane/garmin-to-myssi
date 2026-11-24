@@ -1,18 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QrExportReport } from '../../shared/qrBatch';
-import { qrPng, ssiPayload } from '../../shared/ssiQr';
-import { exportTripQrImages, saveQrImage } from '../services/ssiTransfer';
+import { qrPng, ssiPayload, ssiAirTemperature } from '../../shared/ssiQr';
+import { exportTripQrImages } from '../services/ssiTransfer';
 import { fitLicense, qrLicense } from '../../shared/fitLicense';
+import { archiveLicense } from '../../shared/archiveLicense';
+import { SyncStorageError } from '../../shared/garminSync';
 import { Alert, Image, StyleSheet, Text, TextInput, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Screen } from '../components/Screen';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { RootStackParamList } from '../navigation/types';
 import { useTrips } from '../state/TripProvider';
-import { CsvMapping, EditableField, ImportReport, TripConfig } from '../../shared/model';
-import { effective, localDateTime, missingFields, offsetLabel, tripDives, validateConfig } from '../../shared/domain';
-import { importFile, PreparedFile, prepareFile, SelectedFile, selectFiles } from '../services/fileImport';
-import { exportFile } from '../services/fileExport';
+import { Coordinates, CsvMapping, EditableField, ImportReport, TripConfig } from '../../shared/model';
+import { effective, missingFields, offsetLabel, tripDives, validateConfig } from '../../shared/domain';
+import { expandSelected, importFile, PreparedFile, prepareFile, SelectedFile, selectFiles } from '../services/fileImport';
+import { defaultSsiConditions, SsiConditions } from '../../shared/ssiConditions';
+import { ConditionEditor, ConditionSettings, ConditionSummary, AirInput, parseAir } from './SsiSettingsScreen';
+import { useFocusEffect } from '@react-navigation/native';
+import { getGarminConnection } from '../services/garminConnection';
+import { diveLocalTime, diveOffset, validTimeZone, zoneOffset } from '../../shared/diveTime';
+import { diveCoordinates } from '../../shared/enrichment';
+import { googleFallback, searchDestinations } from '../services/enrichment';
 
 type Props<Name extends keyof RootStackParamList> = NativeStackScreenProps<RootStackParamList, Name>;
 const fieldLabels: Record<EditableField, string> = { maxDepthM: 'Maximum depth (m)', durationSec: 'Duration', waterTempC: 'Water temperature (°C)', locationName: 'Location', notes: 'Notes' };
@@ -34,76 +42,121 @@ function Input({ label, value, onChange, numeric = false, multiline = false }: {
 export function TripsScreen({ navigation }: Props<'Trips'>) {
   const { data, busy, run, removeTrip } = useTrips();
   const [showLicense, setShowLicense] = useState(false);
+  const [connected, setConnected] = useState(false);
+  useFocusEffect(React.useCallback(() => { let active = true; void getGarminConnection().then(c => { if (active) setConnected(!!c); }).catch(() => { if (active) setConnected(false); }); return () => { active = false; }; }, []));
   return <Screen><Text style={styles.title}>Your dive trips</Text>
-    <Copy>Import Garmin files and turn dives into MySSI QR codes. Processing stays on this phone.</Copy>
+    <Copy>Import Garmin files and turn dives into MySSI QR codes. Imports and corrections stay on this phone. Online lookups use dive coordinates and timestamps.</Copy>
     <PrimaryButton label="Create trip" disabled={busy} onPress={() => navigation.navigate('TripSetup')} />
+    <PrimaryButton label={`Garmin Connection: ${connected ? 'Connected' : 'Disconnected'}`} disabled={busy} onPress={() => navigation.navigate('GarminConnection')} />
+    <PrimaryButton label="Global SSI QR Settings" disabled={busy} onPress={() => navigation.navigate('SsiSettings')} />
     {!data.trips.length && <Copy>No trips yet. Create one, then select Garmin CSV or FIT files from your phone.</Copy>}
     {[...data.trips].reverse().map(trip => <View key={trip.id} style={styles.card}>
       <Text style={styles.label}>{trip.config.tripStartDate} – {trip.config.tripEndDate}</Text>
-      <Copy>{tripDives(trip).length} dives · starts at SSI #{trip.config.ssiStartDiveNumber}</Copy>
+      <Copy>{tripDives(trip).length} dives</Copy>
       <PrimaryButton label="Open trip" disabled={busy} onPress={() => navigation.navigate('DiveList', { tripId: trip.id })} />
       <PrimaryButton label="Delete trip" disabled={busy} onPress={() => Alert.alert('Delete trip?', 'This removes the trip and its imported source files from this phone. Files already exported elsewhere are kept.', [
         { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => run(() => removeTrip(trip.id)) }
       ])} />
     </View>)}
-    <Text style={styles.small}>Uninstalling the app or clearing its data removes saved trips. Export files you want to keep. QR codes transfer dive measurements; CSV and JSON are optional review copies.</Text>
+    <Text style={styles.small}>Uninstalling the app or clearing its data removes saved trips. Export QR images you want to keep.</Text>
     <PrimaryButton label={showLicense ? 'Hide third-party licenses' : 'Third-party licenses'} onPress={() => setShowLicense(!showLicense)} />
-    {showLicense && <Text selectable style={styles.small}>{fitLicense}{'\n\n'}{qrLicense}</Text>}
+    {showLicense && <Text selectable style={styles.small}>{fitLicense}{'\n\n'}{qrLicense}{'\n\n'}{archiveLicense}</Text>}
   </Screen>;
 }
 export function TripSetupScreen({ navigation, route }: Props<'TripSetup'>) {
   const { data, busy, run, saveTrip } = useTrips();
-  const tripId = route.params?.tripId;
-  const existing = data.trips.find(t => t.id === tripId);
+  const tripId = route.params?.tripId, existing = data.trips.find(t => t.id === tripId);
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const [start, setStart] = useState(existing?.config.tripStartDate || today), [end, setEnd] = useState(existing?.config.tripEndDate || today);
-  const [number, setNumber] = useState(String(existing?.config.ssiStartDiveNumber || 1));
-  const [offset, setOffset] = useState(String(existing?.config.utcOffsetMinutes ?? -new Date().getTimezoneOffset()));
-  const config: TripConfig = { tripStartDate: start, tripEndDate: end, ssiStartDiveNumber: number.trim() ? Number(number) : NaN, utcOffsetMinutes: offset.trim() ? Number(offset) : NaN };
+  const offset = existing?.config.utcOffsetMinutes ?? -new Date().getTimezoneOffset();
+  const [zone, setZone] = useState(existing?.config.destinationTimeZone || existing?.config.timeZoneOverride || '');
+  const [destination, setDestination] = useState(existing?.config.destination || '');
+  const [destinationCoordinates, setDestinationCoordinates] = useState<Coordinates | undefined>(existing?.config.destinationCoordinates);
+  const [destinations, setDestinations] = useState<Array<Coordinates & { name: string; timeZone?: string }>>([]);
+  const [destinationMessage, setDestinationMessage] = useState('');
+  const [defaults, setDefaults] = useState<SsiConditions>({ ...defaultSsiConditions, ...(existing?.ssiDefaults ?? data.ssiDefaults) });
+  const config: TripConfig = { tripStartDate: start, tripEndDate: end, utcOffsetMinutes: validTimeZone(zone) && /^\d{4}-\d{2}-\d{2}$/.test(start) && Number.isFinite(Date.parse(start)) ? zoneOffset(start + 'T12:00:00Z', zone) : offset, timeZoneOverride: existing?.config.timeZoneOverride, destinationTimeZone: zone.trim() || undefined, destination: destination.trim() || undefined, destinationCoordinates };
   const errors = validateConfig(config);
-  function save() { run(async () => { const id = await saveTrip(config, tripId); navigation.replace('DiveList', { tripId: id }); }); }
-  return <Screen><Text style={styles.title}>{existing ? 'Edit trip' : 'Create trip'}</Text>
+  return <Screen><Text style={styles.title}>{existing ? 'Trip Settings' : 'Create trip'}</Text>
     <Input label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} />
     <Input label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} />
-    <Input label="First SSI dive number" value={number} onChange={setNumber} numeric />
-    <Input label="Trip UTC offset in minutes" value={offset} onChange={setOffset} numeric />
-    <Copy>{Number.isInteger(config.utcOffsetMinutes) ? offsetLabel(config.utcOffsetMinutes) : 'Enter a UTC offset'}. For Singapore use 480; for UTC use 0. Dates, times, and exports use this fixed offset. Create separate trips for changes in time zone or daylight saving.</Copy>
+    {(!existing || !existing.dives.some(d => diveCoordinates(d.garminStats))) && <View style={styles.card}>
+      <Input label="Destination (when the trip has no GPS)" value={destination} onChange={value => { setDestination(value); setDestinationCoordinates(undefined); setZone(''); setDestinations([]); }} />
+      <PrimaryButton label="Find destination" disabled={busy || !destination.trim()} onPress={() => run(async () => { const matches = await searchDestinations(destination); setDestinations(matches); setDestinationMessage(matches.length ? 'Choose a destination, then save the trip.' : 'No matching destination. Try a nearby town or island.'); })} />
+      {destinations.map((p, i) => <PrimaryButton key={i} label={p.name} disabled={busy} onPress={() => { setDestination(p.name); setZone(p.timeZone || ''); setDestinationCoordinates({ latitude: p.latitude, longitude: p.longitude }); setDestinations([]); setDestinationMessage('Destination selected. Save the trip to apply.'); }} />)}
+      {!!destinationCoordinates && <Copy>{destinationCoordinates.latitude.toFixed(4)}, {destinationCoordinates.longitude.toFixed(4)}</Copy>}
+      {!!destinationMessage && <Copy>{destinationMessage}</Copy>}
+    </View>}
+    <Text style={styles.label}>SSI QR defaults</Text>
+    <ConditionSettings values={defaults} onChange={setDefaults} />
+    <PrimaryButton label="Apply global settings" disabled={busy} onPress={() => setDefaults({ ...defaultSsiConditions, ...data.ssiDefaults })} />
+    <Copy>Time zone and historical air temperature are filled automatically from GPS or your selected destination.</Copy>
     {errors.map(e => <Text key={e} style={styles.error}>{e}</Text>)}
-    <PrimaryButton label="Save trip" disabled={busy || !!errors.length} onPress={() => {
-      if (existing) Alert.alert('Update trip settings?', 'Dates and offset can change which dives are included. Included dives will be numbered again from the first SSI number.', [ { text: 'Cancel', style: 'cancel' }, { text: 'Save', onPress: save } ]);
-      else save();
-    }} />
+    <PrimaryButton label="Save trip" disabled={busy || !!errors.length} onPress={() => run(async () => {
+      if (destination.trim() && !destinationCoordinates && !existing?.dives.some(d => diveCoordinates(d.garminStats))) throw new Error('Find and select your destination first.');
+      const id = await saveTrip(config, tripId, defaults); navigation.replace('DiveList', { tripId: id });
+    })} />
   </Screen>;
 }
 export function DiveListScreen({ navigation, route }: Props<'DiveList'>) {
-  const { data, busy } = useTrips();
+  const { data, busy, run } = useTrips();
+  const cancelExport = useRef(false);
+  const [batchActive, setBatchActive] = useState(false), [batchReport, setBatchReport] = useState<QrExportReport>();
+  const [message, setMessage] = useState('');
+  useEffect(() => () => { cancelExport.current = true; }, []);
   const trip = data.trips.find(t => t.id === route.params.tripId);
   if (!trip) return <Screen><Copy>Trip no longer exists. Return to your trips.</Copy></Screen>;
   const dives = tripDives(trip);
   return <Screen><Text style={styles.title}>{trip.config.tripStartDate} – {trip.config.tripEndDate}</Text>
     <Copy>{dives.length} included · {trip.dives.length - dives.length} outside trip dates · {offsetLabel(trip.config.utcOffsetMinutes)}</Copy>
     <PrimaryButton label="Import Garmin files" disabled={busy} onPress={() => navigation.navigate('Import', { tripId: trip.id })} />
-    <PrimaryButton label="Edit trip settings" disabled={busy} onPress={() => navigation.navigate('TripSetup', { tripId: trip.id })} />
+    <PrimaryButton label="Sync Garmin" disabled={busy} onPress={() => navigation.navigate('GarminSync', { tripId: trip.id })} />
+    <PrimaryButton label="Trip Settings" disabled={busy} onPress={() => navigation.navigate('TripSetup', { tripId: trip.id })} />
     {!dives.length && <Copy>No dives inside these dates. Import files or adjust your trip dates.</Copy>}
     {dives.map(dive => <View key={dive.id} style={styles.card}>
-      <Text style={styles.label}>SSI #{dive.ssiDiveNumber}</Text>
-      <Copy>{localDateTime(dive.startTime, trip.config.utcOffsetMinutes)}</Copy>
-      <Copy>{dive.locationName || 'Location missing'} · {dive.maxDepthM === undefined ? 'Depth missing' : `${dive.maxDepthM} m`}</Copy>
+      <Text style={styles.label}>Dive {dive.sequence}</Text>
+      <Copy>{diveLocalTime(dive, trip.config)}</Copy>
+      <Copy>{dive.locationName || (dive.enrichment?.checkedAt ? 'Location unavailable' : 'Finding location�')} · {dive.maxDepthM === undefined ? 'Depth missing' : `${dive.maxDepthM} m`}</Copy>
       {!!missingFields(dive).length && <Text style={styles.error}>Review: {missingFields(dive).join(', ')}</Text>}
       <PrimaryButton label="Review dive" disabled={busy} onPress={() => navigation.navigate('DiveDetail', { tripId: trip.id, diveId: dive.id })} />
     </View>)}
-    <PrimaryButton label="Transfer dives to MySSI" disabled={busy || !dives.length} onPress={() => navigation.navigate('SsiTransfer', { tripId: trip.id })} />
-    <PrimaryButton label="Export review files" disabled={busy || !dives.length} onPress={() => navigation.navigate('Export', { tripId: trip.id })} />
+    <PrimaryButton label="Export all QR codes to gallery" disabled={busy || !dives.length} onPress={() => run(async () => {
+      cancelExport.current = false; setBatchActive(true); setBatchReport(undefined);
+      try {
+        const report = await exportTripQrImages(trip, value => setMessage(`Exporting ${value.processed} of ${value.total} · Dive ${value.sequence}`), () => cancelExport.current);
+        setBatchReport(report); setMessage(`${report.saved} of ${report.total} QR images saved${report.cancelled ? ' · cancelled' : ''}.`);
+      } finally { setBatchActive(false); }
+    })} />
+    {batchActive && <PrimaryButton label="Stop after current image" onPress={() => { cancelExport.current = true; }} />}
+    {batchReport?.failures.map(f => <Text key={f.sequence} style={styles.error}>Dive {f.sequence}: {f.reason}</Text>)}
+    {!!message && <Copy>{message}</Copy>}
+    <Copy>Open MySSI’s QR scanner and choose a saved image from the Dive Log Transfer gallery album. Review and save each dive in MySSI. MySSI assigns its dive number.</Copy>
+    <Text style={styles.small}>Locations: © OpenStreetMap contributors (ODbL). Weather and time zones: Open-Meteo (CC BY 4.0), geographic names: GeoNames. Lookup results are saved for offline use. Location names are local references; QR codes cannot map them to SSI site IDs.</Text>
   </Screen>;
 }
 export function ImportScreen({ route }: Props<'Import'>) {
-  const { data, busy, run, updateTrip } = useTrips();
+  const { data, busy, run, transactTrip } = useTrips();
   const trip = data.trips.find(t => t.id === route.params.tripId);
   const [queue, setQueue] = useState<SelectedFile[]>([]), [current, setCurrent] = useState<PreparedFile | undefined>();
   const [mapping, setMapping] = useState<CsvMapping | undefined>(), [report, setReport] = useState<ImportReport | undefined>();
   const [message, setMessage] = useState('');
   const [conflictFile, setConflictFile] = useState<{ file: PreparedFile; mapping?: CsvMapping }>();
   const [preparationError, setPreparationError] = useState('');
+  const abort = useRef<AbortController>();
+  const cleanups = useRef<(() => Promise<void>)[]>([]);
+  const [batchActive, setBatchActive] = useState(false);
+  useEffect(() => () => { abort.current?.abort(); for (const cleanup of cleanups.current) void cleanup().catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!busy && !batchActive && !queue.length && !conflictFile) {
+      const finished = cleanups.current.splice(0);
+      for (const cleanup of finished) void cleanup().catch(() => undefined);
+    }
+  }, [busy, batchActive, queue.length, conflictFile]);
+  async function commit(file: PreparedFile, selectedMapping?: CsvMapping, allow = false) {
+    let result!: Awaited<ReturnType<typeof importFile>>;
+    await transactTrip(route.params.tripId, async latest => { result = await importFile(latest, file, selectedMapping, allow); return result.trip; });
+    return result;
+  }
   async function prepare(file: SelectedFile | undefined) {
     setCurrent(undefined); setMapping(undefined); setPreparationError('');
     if (!file) return;
@@ -114,10 +167,40 @@ export function ImportScreen({ route }: Props<'Import'>) {
   async function next() { const remaining = queue.slice(1); setQueue(remaining); await prepare(remaining[0]); }
   if (!trip) return <Screen><Copy>Trip no longer exists.</Copy></Screen>;
   return <Screen><Text style={styles.title}>Import Garmin files</Text>
-    <Copy>Select local .fit or .csv exports. Each file is saved when you tap Import this file. Maximum 20 MB per file.</Copy>
+    <Copy>Select local .fit, .csv or multiple .zip exports. ZIPs are extracted automatically. Maximum 20 MB per source file; ZIP limit 32 MB, 128 entries, 80 MB extracted, compression ratio 200:1. Nested archives are unsupported.</Copy>
     <PrimaryButton label="Select files" disabled={busy || !!queue.length} onPress={() => run(async () => {
-      const selected = await selectFiles(); if (!selected.length) return; setQueue(selected); setReport(undefined); setConflictFile(undefined); setMessage(''); await prepare(selected[0]);
+      const selected = await selectFiles(); if (!selected.length) return;
+      for (const cleanup of cleanups.current) await cleanup(); cleanups.current = [];
+      abort.current = new AbortController(); setBatchActive(true); setConflictFile(undefined);
+      const files: SelectedFile[] = [], failures: string[] = [];
+      try { for (const [i, file] of selected.entries()) {
+        if (abort.current.signal.aborted) break;
+        setMessage(`Preparing file ${i + 1} of ${selected.length}`);
+        try { const expanded = await expandSelected(file, abort.current.signal); files.push(...expanded.files); cleanups.current.push(expanded.cleanup); failures.push(...expanded.unsupported.map(n => `${file.name}: unsupported entry ${n}`)); }
+        catch (e) { if (!abort.current.signal.aborted) failures.push(`${file.name}: ${e instanceof Error ? e.message : 'Could not open file.'}`); if (e instanceof Error && /storage/i.test(e.message)) break; }
+      } } finally { setBatchActive(false); }
+      setQueue(files); setReport({ accepted: 0, duplicates: 0, outsideTrip: 0, conflicts: [], failures }); setMessage(abort.current.signal.aborted ? 'Preparation cancelled. Prepared files remain available below.' : 'Files prepared. Import FIT files together, or confirm CSV mappings individually.'); await prepare(files[0]);
     })} />
+    {batchActive && <PrimaryButton label="Cancel batch" onPress={() => abort.current?.abort()} />}
+    {!!queue.filter(f => /\.fit$/i.test(f.name)).length && <PrimaryButton label="Import all FIT files" disabled={busy} onPress={() => run(async () => {
+      abort.current = new AbortController(); setBatchActive(true); setConflictFile(undefined);
+      const total: ImportReport = { accepted: 0, duplicates: 0, outsideTrip: 0, failures: [], conflicts: [] };
+      const remaining = [...queue];
+      try { for (const [i, file] of queue.entries()) {
+        if (abort.current.signal.aborted) break;
+        if (!/\.fit$/i.test(file.name)) continue;
+        setMessage(`Importing FIT file ${i + 1} of ${queue.length}`);
+        try { const prepared = await prepareFile(file); if (abort.current.signal.aborted) break; const result = await commit(prepared);
+          total.accepted += result.report.accepted; total.duplicates += result.report.duplicates; total.outsideTrip += result.report.outsideTrip;
+          total.failures.push(...result.report.failures); total.conflicts.push(...result.report.conflicts.map(text => `${file.name}: ${text}`));
+          if (result.report.uncertain) { setConflictFile({ file: prepared }); continue; }
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : 'Import failed.'; total.failures.push(`${file.name}: ${reason}`);
+          if (e instanceof SyncStorageError || /Save failed|Load saved data|Storage|storage|copy|space/i.test(reason)) throw e;
+        }
+        remaining.splice(remaining.indexOf(file), 1);
+      } } finally { setBatchActive(false); setQueue(remaining); setReport(total); setMessage(`${total.accepted} dives added · ${total.duplicates} duplicates skipped${abort.current.signal.aborted ? ' · cancelled' : ''}. Saved dives are kept. CSV files need column and unit confirmation.`); await prepare(remaining[0]); }
+    })} />}
     {!!queue.length && <Copy>{queue.length} files remaining · {queue[0].name}</Copy>}
     {!!preparationError && <Text style={styles.error}>{preparationError}</Text>}
     {current && <View style={styles.card}>
@@ -126,7 +209,7 @@ export function ImportScreen({ route }: Props<'Import'>) {
         <Copy>Confirm column names and units. Copy names exactly from the list below. Leave optional fields empty if unavailable.</Copy>
         <Text selectable style={styles.small}>Columns: {current.headers.join(' | ')}</Text>
         <Input label="Start time column" value={mapping.start} onChange={v => mappingValue('start', v)} />
-        {(['id', 'duration', 'depth', 'temperature', 'location', 'notes'] as const).map(key => <Input key={key} label={`${key} column (optional)`} value={mapping[key] || ''} onChange={v => mappingValue(key, v)} />)}
+        {(['id', 'duration', 'depth', 'temperature', 'location', 'notes', 'entryLatitude', 'entryLongitude', 'exitLatitude', 'exitLongitude', 'latitude', 'longitude'] as const).map(key => <Input key={key} label={`${key} column (optional)`} value={mapping[key] || ''} onChange={v => mappingValue(key, v)} />)}
         <Copy>Duration unit: {mapping.durationUnit}</Copy>
         <View style={{ gap: 6 }}>{(['seconds', 'minutes', 'clock'] as const).map(unit => <PrimaryButton key={unit} label={unit === 'clock' ? 'Use mm:ss or hh:mm:ss' : `Use ${unit}`} disabled={busy || mapping.durationUnit === unit} onPress={() => mappingValue('durationUnit', unit)} />)}</View>
         <Copy>Depth unit: {mapping.depthUnit}</Copy><PrimaryButton label={mapping.depthUnit === 'm' ? 'Change to feet' : 'Change to metres'} disabled={busy} onPress={() => mappingValue('depthUnit', mapping.depthUnit === 'm' ? 'ft' : 'm')} />
@@ -134,8 +217,7 @@ export function ImportScreen({ route }: Props<'Import'>) {
         <Copy>Times without a UTC offset will use {offsetLabel(trip.config.utcOffsetMinutes)}. Start time must be YYYY-MM-DD HH:mm[:ss]. Confirm that this matches the source file before importing.</Copy>
       </>}
       <PrimaryButton label="Import this file" disabled={busy || (!!mapping && !mapping.start)} onPress={() => run(async () => {
-        const result = await importFile(trip, current, mapping);
-        if (result.report.accepted) await updateTrip(result.trip);
+        const result = await commit(current, mapping);
         setConflictFile(result.report.uncertain ? { file: current, mapping } : undefined);
         setReport(result.report); setMessage(result.report.accepted ? 'Accepted dives saved on this phone.' : 'No new dives saved.'); await next();
       })} />
@@ -143,36 +225,41 @@ export function ImportScreen({ route }: Props<'Import'>) {
     {!!queue.length && <PrimaryButton label="Skip this file" disabled={busy} onPress={() => run(next)} />}
     {!!queue.length && <PrimaryButton label="Cancel remaining files" disabled={busy} onPress={() => { setQueue([]); setCurrent(undefined); setMapping(undefined); setPreparationError(''); }} />}
     {!!message && <Copy>{message}</Copy>}
-    {report && <View style={styles.card}><Copy>Last file: {report.accepted} accepted, {report.duplicates} duplicates, {report.outsideTrip} accepted outside trip dates.</Copy>
+    {report && <View style={styles.card}><Copy>Import result: {report.accepted} accepted, {report.duplicates} duplicates, {report.outsideTrip} accepted outside trip dates.</Copy>
       {report.failures.map((e, i) => <Text key={`failure-${i}`} selectable style={styles.error}>{e}</Text>)}
       {report.conflicts.map((e, i) => <Text key={`conflict-${i}`} selectable style={styles.error}>{e}</Text>)}
       {!!report.conflicts.length && <Copy>Conflicting records were skipped. Existing dives and corrections were kept.</Copy>}
-      {conflictFile && !!report.uncertain && <PrimaryButton label="Import uncertain matches as separate dives" disabled={busy} onPress={() => Alert.alert('Keep both dives?', 'Only do this when the records at the same start time are different dives. Existing corrections will be preserved. This may change SSI numbering.', [ { text: 'Cancel', style: 'cancel' }, { text: 'Keep both', onPress: () => run(async () => { const result = await importFile(trip, conflictFile.file, conflictFile.mapping, true); if (result.report.accepted) await updateTrip(result.trip); setReport(result.report); setConflictFile(undefined); setMessage('Conflict resolution saved.'); }) } ])} />}
+      {conflictFile && <PrimaryButton label="Import uncertain matches as separate dives" disabled={busy} onPress={() => Alert.alert('Keep both dives?', 'Only do this when the records at the same start time are different dives. Existing corrections will be preserved. This may change the trip sequence.', [ { text: 'Cancel', style: 'cancel' }, { text: 'Keep both', onPress: () => run(async () => { const result = await commit(conflictFile.file, conflictFile.mapping, true); setReport(result.report); setConflictFile(undefined); setMessage('Conflict resolution saved.'); }) } ])} />}
     </View>}
   </Screen>;
 }
 export function DiveDetailScreen({ navigation, route }: Props<'DiveDetail'>) {
   const { data, busy } = useTrips(); const { tripId, diveId } = route.params;
+  const [showMeasurements, setShowMeasurements] = useState(false);
   const trip = data.trips.find(t => t.id === tripId), dive = trip && tripDives(trip).find(d => d.id === diveId);
   if (!trip || !dive) return <Screen><Copy>This dive is no longer inside the trip.</Copy></Screen>;
-  return <Screen><Text style={styles.title}>SSI #{dive.ssiDiveNumber}</Text>
-    <Copy>{localDateTime(dive.startTime, trip.config.utcOffsetMinutes)} · {offsetLabel(trip.config.utcOffsetMinutes)}</Copy>
+  const editing = route.params.edit === true;
+  return <Screen><Text style={styles.title}>{editing ? 'Edit dive' : `Dive ${dive.sequence}`}</Text>
+    <Copy>{diveLocalTime(dive, trip.config)} · {offsetLabel(diveOffset(dive, trip.config))}</Copy>
     <Text style={styles.small}>Source: {trip.files.find(f => f.id === dive.sourceFileId)?.name}</Text>
-    <PrimaryButton label="Show MySSI QR code" disabled={busy} onPress={() => navigation.navigate('SsiTransfer', { tripId, diveId })} />
-    {(Object.keys(fieldLabels) as EditableField[]).map(field => <View key={field} style={styles.card}>
+    <Copy>Garmin dive type: {dive.diveKind === 'freedive' ? 'Freediving' : dive.diveKind === 'ccr' ? 'CCR rebreather' : 'Scuba'}</Copy>
+    <DiveQrReview key={dive.id} tripId={tripId} diveId={diveId} editing={editing} />
+    {!editing && <PrimaryButton label="Edit dive" onPress={() => navigation.push('DiveDetail', { tripId, diveId, edit: true })} />}
+    {(Object.keys(fieldLabels) as EditableField[]).map(field => <View key={field} style={{ gap: 2 }}>
       <Text style={styles.label}>{fieldLabels[field]}</Text>
       <Copy>{dive[field] === undefined || dive[field] === '' ? 'Missing' : field === 'durationSec' ? `${Math.floor(dive.durationSec! / 60)} min ${Number((dive.durationSec! % 60).toFixed(2))} sec` : String(dive[field])}</Copy>
       {field in dive.corrections && <Text style={styles.small}>Corrected locally</Text>}
-      <PrimaryButton label={`Edit ${fieldLabels[field]}`} disabled={busy} onPress={() => navigation.navigate('FieldCorrection', { tripId, diveId, field })} />
+      {editing && <PrimaryButton label={`Edit ${fieldLabels[field]}`} disabled={busy} onPress={() => navigation.navigate('FieldCorrection', { tripId, diveId, field })} />}
     </View>)}
-    <View style={styles.card}><Text style={styles.label}>Additional Garmin measurements</Text>
+    <PrimaryButton label={showMeasurements ? "Hide Garmin measurements" : "Additional Garmin measurements"} onPress={() => setShowMeasurements(!showMeasurements)} />
+    {showMeasurements && <View style={styles.card}><Text style={styles.label}>Additional Garmin measurements</Text>
       {dive.maxWaterTempC !== undefined && <Copy>Maximum water temperature: {dive.maxWaterTempC} °C</Copy>}
       {Object.entries(dive.garminStats || {}).filter(([, value]) => value !== undefined).map(([key, value]) => <Copy key={key}>{({
         avgDepthM: 'Average depth (m)', surfaceIntervalSec: 'Surface interval (seconds)', latitude: 'Latitude', longitude: 'Longitude',
         avgHeartRateBpm: 'Average heart rate (bpm)', maxHeartRateBpm: 'Maximum heart rate (bpm)', endCnsPercent: 'CNS at end (%)', oxygenToxicityOtu: 'Oxygen toxicity (OTU)', waterType: 'Water type'
       } as Record<string, string>)[key] || key}: {typeof value === 'number' ? Number(value.toFixed(6)) : value}</Copy>)}
-      <Text style={styles.small}>Available values are preserved in CSV/JSON exports. MySSI QR supports water temperature range and fresh/salt water type. GPS, average depth, surface interval, heart rate and oxygen exposure have no confirmed QR fields. Garmin GPS cannot identify an SSI dive-site database entry automatically.</Text>
-    </View>
+      <Text style={styles.small}>MySSI QR supports water temperature range and fresh/salt water type. GPS, average depth, surface interval, heart rate and oxygen exposure have no confirmed QR fields. Garmin GPS cannot identify an SSI dive-site database entry automatically.</Text>
+    </View>}
   </Screen>;
 }
 export function FieldCorrectionScreen({ navigation, route }: Props<'FieldCorrection'>) {
@@ -198,88 +285,51 @@ export function FieldCorrectionScreen({ navigation, route }: Props<'FieldCorrect
     })} />
   </Screen>;
 }
-export function ExportScreen({ route }: Props<'Export'>) {
-  const { data, busy, run } = useTrips(); const [message, setMessage] = useState('');
-  const trip = data.trips.find(t => t.id === route.params.tripId);
-  if (!trip) return <Screen><Copy>Trip no longer exists.</Copy></Screen>;
-  const dives = tripDives(trip), incomplete = dives.filter(d => missingFields(d).length);
-  function output(format: 'csv' | 'json', action: 'save' | 'share') {
-    const proceed = () => run(async () => { setMessage(''); setMessage(await exportFile(trip!, format, action)); });
-    if (incomplete.length) Alert.alert('Export with missing fields?', `${incomplete.length} dives have missing review fields. Those values will remain empty in the export.`, [ { text: 'Cancel', style: 'cancel' }, { text: 'Export anyway', onPress: proceed } ]);
-    else proceed();
-  }
-  return <Screen><Text style={styles.title}>Export dive review</Text><Copy>{dives.length} dives · {incomplete.length} need review</Copy>
-    <Copy>CSV uses metres, Celsius, and decimal minutes. JSON preserves duration in seconds. Times use {offsetLabel(trip.config.utcOffsetMinutes)}.</Copy>
-    <Copy>These files are optional review copies. Use Transfer dives to MySSI for QR import without retyping measurements. JSON exports are not a full backup of source files and edit history.</Copy>
-    {incomplete.map(d => <Text key={d.id} style={styles.error}>SSI #{d.ssiDiveNumber}: {missingFields(d).join(', ')}</Text>)}
-    {(['csv', 'json'] as const).map(format => <View key={format} style={styles.card}><Text style={styles.label}>{format.toUpperCase()}</Text>
-      <PrimaryButton label={`Save ${format.toUpperCase()} to folder`} disabled={busy || !dives.length} onPress={() => output(format, 'save')} />
-      <PrimaryButton label={`Share ${format.toUpperCase()}`} disabled={busy || !dives.length} onPress={() => output(format, 'share')} />
-    </View>)}
-    {!!message && <Text selectable style={styles.text}>{message}</Text>}
-  </Screen>;
-}
 
-export function SsiTransferScreen({ navigation, route }: Props<'SsiTransfer'>) {
-  const { data, busy, run, confirmSsiSaved, setSsiType } = useTrips();
-  const trip = data.trips.find(t => t.id === route.params.tripId);
-  const dives = trip ? tripDives(trip) : [];
-  const [position, setPosition] = useState(() => Math.max(0, dives.findIndex(d => d.id === route.params.diveId)));
-  const dive = dives[Math.min(position, Math.max(0, dives.length - 1))];
-  const diveType = dive?.ssiTypeOverride;
-  const cancelExport = useRef(false);
-  const [batchActive, setBatchActive] = useState(false), [batchReport, setBatchReport] = useState<QrExportReport>();
-  const [message, setMessage] = useState(''), [showTypes, setShowTypes] = useState(false);
-  useEffect(() => { setMessage(''); setShowTypes(false); }, [dive?.id]);
-  useEffect(() => () => { cancelExport.current = true; }, []);
-  const image = useMemo<{ payload?: string; base64?: string; width?: number; error?: string }>(() => {
-    if (!trip || !dive) return { error: 'No dives inside this trip to transfer.' };
-    try { const payload = ssiPayload(dive, trip.config, diveType); return { payload, ...qrPng(payload) }; }
-    catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
-  }, [dive?.id, dive?.durationSec, dive?.maxDepthM, dive?.waterTempC, dive?.maxWaterTempC, dive?.garminStats?.waterType, dive?.startTime, dive?.diveKind, trip?.config.utcOffsetMinutes, diveType]);
-  if (!trip || !dive) return <Screen><Copy>No dives inside this trip to transfer.</Copy></Screen>;
-  const selectedType = diveType ?? (dive.diveKind === 'freedive' ? 6 : dive.diveKind === 'ccr' ? 8 : 0);
-  const types = [{ id: 0, name: 'Scuba' }, { id: 2, name: 'Extended range' }, { id: 4, name: 'SCR rebreather' }, { id: 6, name: 'Freediving' }, { id: 8, name: 'CCR rebreather' }];
-  const marked = dives.filter(d => d.ssiMarkedSavedAt).length;
-  function exportAll(destination: 'gallery' | 'folder') {
-    run(async () => {
-      cancelExport.current = false; setBatchActive(true); setBatchReport(undefined);
-      try {
-        const result = await exportTripQrImages(trip!, destination, value => setMessage(`Exporting ${value.processed} of ${value.total} QR images · SSI #${value.diveNumber}`), () => cancelExport.current);
-        setBatchReport(result); setMessage(`${result.saved} of ${result.total} QR images saved${result.cancelled ? ' · export stopped' : ''}. Open MySSI and choose each saved image from the gallery.`);
-      } finally { setBatchActive(false); }
-    });
-  }
-  return <Screen><Text style={styles.title}>Transfer to MySSI</Text>
-    <Copy>Dive {Math.min(position + 1, dives.length)} of {dives.length} · expected SSI #{dive.ssiDiveNumber}</Copy>
-    <Copy>{localDateTime(dive.startTime, trip.config.utcOffsetMinutes)} · {offsetLabel(trip.config.utcOffsetMinutes)}</Copy>
-    <Copy>Type: {types.find(t => t.id === selectedType)?.name}. Depth {dive.maxDepthM ?? 'missing'} m · duration {dive.durationSec === undefined ? 'missing' : `${Math.round(dive.durationSec / 60)} min`} · water {dive.waterTempC === undefined ? 'not recorded' : `${dive.waterTempC} °C`}</Copy>
-    {image.base64 ? <View style={{ alignItems: 'center', backgroundColor: '#FFFFFF', padding: 8, borderRadius: 8 }}>
-      <Image accessibilityLabel={`MySSI dive QR code for expected dive number ${dive.ssiDiveNumber}`} source={{ uri: `data:image/png;base64,${image.base64}` }} style={{ width: '100%', maxWidth: 400, aspectRatio: 1 }} resizeMode="contain" />
-    </View> : <Text style={styles.error}>{image.error}</Text>}
-    <Copy>Save the codes to your gallery, then open MySSI’s QR scanner and select a saved image from the gallery. Review the populated dive and save it. Repeat for each image.</Copy>
-    <Text style={styles.small}>The code supplies date, time, dive type, depth, duration, available minimum/maximum water temperature, and recorded fresh/salt water type. Other Garmin statistics and GPS remain available in the dive details and CSV/JSON exports. SSI location needs an SSI site ID; Garmin coordinates or free-text names cannot fill it through the known QR format. The code does not include a full depth profile, notes, buddy, or verification. MySSI assigns the final dive number; compare it with the expected number above.</Text>
-    <View style={styles.card}><Text style={styles.label}>Export all {dives.length} dive QR codes</Text>
-      <PrimaryButton label="Export all QR codes to gallery" disabled={busy} onPress={() => exportAll('gallery')} />
-      <PrimaryButton label="Export all QR codes to a folder" disabled={busy} onPress={() => exportAll('folder')} />
-      <Text style={styles.small}>One numbered PNG per included dive. Gallery exports appear in the Dive Log Transfer album. Exporting does not add the dives to MySSI; select each image there.</Text>
-      {batchActive && <PrimaryButton label="Stop after current image" onPress={() => { cancelExport.current = true; setMessage('Stopping after the current image. Images already saved are kept.'); }} />}
-      {batchReport?.failures.map(f => <Text key={f.diveNumber} style={styles.error}>SSI #{f.diveNumber}: {f.reason}</Text>)}
-    </View>
-    <PrimaryButton label="Save this QR to gallery" disabled={busy || !image.base64} onPress={() => run(async () => setMessage(await saveQrImage(dive, trip.config, 'gallery', diveType)))} />
-    <PrimaryButton label="Save QR image" disabled={busy || !image.base64} onPress={() => run(async () => setMessage(await saveQrImage(dive, trip.config, 'save', diveType)))} />
-    <PrimaryButton label="Share this QR image" disabled={busy || !image.base64} onPress={() => run(async () => setMessage(await saveQrImage(dive, trip.config, 'share', diveType)))} />
-    <PrimaryButton label="Review or correct this dive" disabled={busy} onPress={() => navigation.navigate('DiveDetail', { tripId: trip.id, diveId: dive.id })} />
-    <PrimaryButton label={showTypes ? 'Hide dive types' : 'Change SSI dive type'} disabled={busy} onPress={() => setShowTypes(!showTypes)} />
-    {showTypes && types.map(type => <PrimaryButton key={type.id} label={type.name} disabled={busy || selectedType === type.id} onPress={() => run(() => setSsiType(trip.id, dive.id, type.id))} />)}
-    {dive.ssiMarkedSavedAt ? <Copy>You marked this dive saved in MySSI.</Copy> : null}
-    <PrimaryButton label={dive.ssiMarkedSavedAt ? 'Clear saved checkmark' : 'I saved this dive in MySSI'} disabled={busy || !image.base64} onPress={() => run(async () => {
-      await confirmSsiSaved(trip.id, dive.id, !dive.ssiMarkedSavedAt);
-      if (!dive.ssiMarkedSavedAt && position < dives.length - 1) setPosition(position + 1);
+function DiveQrReview({ tripId, diveId, editing }: { tripId: string; diveId: string; editing: boolean }) {
+  const { data, busy, run, saveSsiConditions, transactTrip, correct } = useTrips();
+  const trip = data.trips.find(t => t.id === tripId)!, dive = tripDives(trip).find(d => d.id === diveId)!;
+  const [values, setValues] = useState<SsiConditions>({ ...dive.ssiConditionOverrides });
+  const [air, setAir] = useState(String(dive.ssiAirTempC ?? ''));
+  const [zone, setZone] = useState(dive.timeZoneOverride || '');
+  const [airDirty, setAirDirty] = useState(false);
+  const [googleNames, setGoogleNames] = useState<string[]>([]), [googleMessage, setGoogleMessage] = useState('');
+  const point = dive.enrichment?.coordinates;
+  useEffect(() => {
+    let active = true;
+    if (point && !dive.locationName && !dive.enrichment?.candidates?.length) void googleFallback(point, !!dive.enrichment?.fallback).then(names => { if (active) setGoogleNames(names); }).catch(() => { if (active) setGoogleMessage('Optional Google lookup unavailable. You can enter the location manually.'); });
+    return () => { active = false; };
+  }, [point?.latitude, point?.longitude, dive.locationName, dive.enrichment?.checkedAt, dive.enrichment?.fallback]);
+  let payload = '', payloadError = '';
+  try { payload = ssiPayload({ ...dive, ssiAirTempC: ssiAirTemperature(dive, trip) }, trip.config, trip.ssiDefaults); }
+  catch (e) { payloadError = e instanceof Error ? e.message : String(e); }
+  const image = useMemo(() => {
+    try { return payload ? { ...qrPng(payload), error: '' } : { base64: undefined, error: payloadError }; }
+    catch (e) { return { base64: undefined, error: e instanceof Error ? e.message : String(e) }; }
+  }, [payload, payloadError]);
+  return <View style={styles.card}>
+    {!editing && <><Text style={styles.label}>SSI QR preview</Text>
+    {image.base64 ? <Image accessibilityLabel={`QR code for Dive ${dive.sequence}`} source={{ uri: `data:image/png;base64,${image.base64}` }} style={{ width: '100%', maxWidth: 400, aspectRatio: 1, alignSelf: 'center' }} resizeMode="contain" /> : <Text style={styles.error}>{image.error}</Text>}
+    <Copy>Location: {dive.locationName || 'Not set'}</Copy><Copy>Air temperature: {ssiAirTemperature(dive, trip) ?? 'Unavailable'} �C</Copy><ConditionSummary values={dive.ssiConditionOverrides} recorded={dive.ssiConditions} defaults={trip.ssiDefaults} /></>}
+    {editing && <>
+    {dive.enrichment?.candidates?.map(candidate => <PrimaryButton key={candidate.name} label={`${candidate.name} · ${candidate.kind} · ${candidate.distanceM} m`} disabled={busy} onPress={() => run(() => correct(tripId, diveId, 'locationName', candidate.name))} />)}
+    {!!googleNames.length && <><Text style={styles.label}>Google Maps</Text>{googleNames.map(name => <Copy key={name}>{name}</Copy>)}<Text style={styles.small}>Online reference only; Google names are not saved offline. Use Edit Location to enter your own correction.</Text></>}
+    {!!googleMessage && <Copy>{googleMessage}</Copy>}
+    <Copy>Local time: {diveLocalTime(dive, trip.config)} · {dive.timeZoneOverride || trip.config.timeZoneOverride || dive.enrichment?.timeZone || offsetLabel(trip.config.utcOffsetMinutes)}</Copy>
+    <Text style={styles.small}>Original timestamp: {dive.recordedStartTime || dive.startTime}{dive.enrichment?.fallback ? ' · Using fallback coordinates' : ''}</Text>
+    <Input label="Dive time zone correction (optional)" value={zone} onChange={setZone} />
+    <PrimaryButton label="Save time zone correction" disabled={busy} onPress={() => run(async () => {
+      if (zone.trim() && !validTimeZone(zone.trim())) throw new Error('Enter a geographic time zone, such as Asia/Singapore.');
+      await transactTrip(tripId, async latest => ({ ...latest, dives: latest.dives.map(d => d.id === diveId ? { ...d, timeZoneOverride: zone.trim() || undefined } : d) }));
     })} />
-    <Text style={styles.small}>{marked} of {dives.length} marked saved. This is your local checklist; it cannot check MySSI or prevent duplicate imports there. Editing a dive here does not update an existing MySSI entry.</Text>
-    <PrimaryButton label="Previous dive" disabled={busy || position === 0} onPress={() => setPosition(Math.max(0, position - 1))} />
-    <PrimaryButton label="Next dive" disabled={busy || position >= dives.length - 1} onPress={() => setPosition(position + 1)} />
-    {!!message && <Text selectable style={styles.text}>{message}</Text>}
-  </Screen>;
+    <ConditionEditor values={values} onChange={setValues} recorded={dive.ssiConditions} defaults={trip.ssiDefaults} />
+    <Copy>Air temperature: {ssiAirTemperature(dive, trip) ?? 'Not set'} °C</Copy>
+    <AirInput value={air} onChange={value => { setAir(value); setAirDirty(true); }} />
+    <Copy>Clearing and saving air temperature omits it until you choose to use historical / trip temperature again.</Copy>
+    <PrimaryButton label="Save dive QR conditions and air temperature" disabled={busy} onPress={() => run(async () => { await saveSsiConditions(tripId, diveId, values, parseAir(air), airDirty); setAirDirty(false); })} />
+    <PrimaryButton label="Use historical / trip air temperature" disabled={busy} onPress={() => run(async () => { await transactTrip(tripId, async latest => ({ ...latest, dives: latest.dives.map(d => d.id === diveId ? { ...d, ssiAirTempC: undefined, airTempManual: false } : d) })); setAir(''); setAirDirty(false); })} />
+    </>}
+    {dive.enrichment?.errors?.map(error => <Text key={error} style={styles.small}>{error}</Text>)}
+    <Text style={styles.small}>Location is optional. QR codes carry measurements and conditions; MySSI site selection stays in MySSI.</Text>
+  </View>;
 }

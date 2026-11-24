@@ -1,28 +1,24 @@
-# Android 0.2.0 validation — 16 October 2026
+# Android implementation validation - 17 November 2026
 
-Deliverable: `dist/DiveLogTransfer-0.2.0.apk` (63,759,676 bytes).
+PLAN.md app streamlining and geographic/historical-weather enrichment are implemented.
 
-SHA-256: `478750f02295ae55c20d4b7f27eea5a197ab2f115ee290218715923a874fd379`.
+## Completed
 
-Package `com.divelogtransfer.app`, version code 2. Minimum Android 7.0/API 24; target API 34. Includes arm64-v8a, armeabi-v7a, x86 and x86_64.
+- All 54 automated tests pass. Coverage includes imports/ZIP bounds/CRC, sync transactions, duplicate preservation, stored corrections/recovery, legacy schema compatibility, entry/exit GPS priority, missing-GPS fallback, OSM ranking/ambiguity/business exclusion/boundaries, geographic midnight/DST, naive versus explicit CSV timestamps, historical UTC-hour matching, manual temperature precedence/omission, weather failure handling, selected destinations, optional Google proxy filtering/quotas and independent QR PNG decoding.
+- npm run typecheck passes.
+- npm run bundle:android passes, producing a standalone Hermes bundle in dist/android.
+- Navigation has one dive review route, combined Trip Settings and a trip-level gallery export. Separate transfer/review-file routes and their unused services are removed. Global defaults and Garmin connection management remain.
+- App phone-location dependencies/permissions are removed; online enrichment uses imported Garmin GPS or a selected destination. Existing signing configuration, package identity and source-file storage are preserved.
+- Legacy numbering/checklist/type overrides remain loadable but no longer drive QR behavior. New automatic metadata is validated and saved independently of corrections.
 
-## Completed checks
+## Device/external acceptance remaining
 
-- TypeScript checking passed.
-- All 25 automated behavioral tests passed, including FIT decoding, optional Garmin statistics/GPS, persistence/recovery, QR payload/PNG decoding, saved SSI type overrides, partial batch failures, cancellation and numbering validation.
-- Signed release assembly and Android release lint passed.
-- APK Signature Scheme v2 verification passed with the durable project release key.
-- Release manifest has no INTERNET permission.
-- The APK's embedded JavaScript bytes match the generated release bundle. All 18 application source files found in its Metro source map match the current workspace.
-- Compatible navigation dependencies resolve without invalid peer dependencies.
-- The user confirmed MySSI gallery selection and successful import of the basic generated sample QR. No repeat sample test was requested.
+Signed release APK built as version 0.4.0, Android version code 4: `dist/DiveLogTransfer-0.4.0.apk` (63,823,332 bytes). SHA-256: `355be4dee769d1d8f4bb836f9d9bcde2fd5c23019c5606c4aefd6233a946d2b3`. A checksum file is provided alongside the APK.
 
-## Physical acceptance remaining
+Release assembly and vital lint pass. APK Signature Scheme v2 verification passes using the existing project signing key. Package identity is `com.divelogtransfer.app`, minimum API 24, target API 34, with arm64-v8a, armeabi-v7a, x86 and x86_64 included. The APK's embedded Hermes bundle matches the generated release bundle, and all 30 application sources found in its source map match this checkout. Installation and physical acceptance have not been performed.
 
-No Android device was connected. APK installation, first launch in airplane mode, actual Garmin watch exports, gallery permission/indexing on the user's phone, and complete APK-to-MySSI transfer remain for sideload acceptance. Synthetic FIT binaries were used for automated parser checks. The extra maximum-temperature and water-type QR fields use published helper mappings; the user's successful sample contained only the basic fields.
+On the target phone, install over the existing app with the same signing key, verify existing trips/source files/corrections, connect/disconnect Garmin and confirm home status, import real watch exports, inspect location candidates/time zones/weather, test airplane-mode review and gallery export, cancel a batch and verify per-dive errors, and import the generated images in MySSI. Synthetic Garmin FIT fixtures and mocked provider responses underpin automated checks; they do not certify real-provider coverage or installed-screen behavior.
 
-## Transfer limits
+Google fallback is disabled unless an HTTPS proxy is configured. A reference proxy and configuration instructions are in enrichment.md. No Google key, billing setup or public proxy has been provisioned. Provider terms, attribution, quotas, geographic coverage and public-service availability require deployment-specific verification.
 
-QR export fills the known supported date/time, type, depth, duration, available minimum/maximum submerged temperature, and explicit fresh/salt water setting. SSI site selection requires an SSI site database ID; Garmin GPS or a name cannot be converted automatically with the offline data available. GPS and additional supported Garmin measurements are retained in details and CSV/JSON. No unconfirmed keys are emitted for profile curves, heart rate, surface interval, CNS, oxygen toxicity, notes, buddies or verification.
-
-Gallery batch export generates one image per included dive. Importing and saving each image remains an action inside MySSI. The app's saved checkmarks are a local checklist only.
+The user previously confirmed a basic generated QR image can be selected and imported through MySSI's gallery scanner. The newly consolidated screen flow and enriched values still need physical acceptance. MySSI site IDs, profiles, notes, buddies and verification are not emitted as speculative QR fields.

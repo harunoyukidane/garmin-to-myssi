@@ -2,7 +2,7 @@
   "expo": {
     "name": "Dive Log Transfer",
     "slug": "dive-log-transfer",
-    "version": "0.2.0",
+    "version": "0.4.1",
     "scheme": "divelogtransfer",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -16,11 +16,18 @@
     },
     "android": {
       "package": "com.divelogtransfer.app",
-      "versionCode": 2,
+      "versionCode": 5,
+      "permissions": [
+        "android.permission.INTERNET"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#0B3B46"
       },
-      "allowBackup": false
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro"

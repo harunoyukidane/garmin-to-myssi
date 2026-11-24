@@ -24,7 +24,9 @@ export function suggestMapping(headers: string[]): CsvMapping {
   const pick = (...names: string[]) => headers.find(h => names.some(n => n.toLowerCase() === h.toLowerCase())) || '';
   return { start: pick('startTime', 'startedAt', 'Date'), id: pick('id', 'activityId'), duration: pick('durationSec', 'durationSeconds'),
     depth: pick('maxDepthM', 'maxDepthMeters'), temperature: pick('waterTempC', 'waterTemperatureCelsius'),
-    location: pick('locationName', 'location', 'Title'), notes: pick('notes'), durationUnit: 'seconds', depthUnit: 'm', temperatureUnit: 'C' };
+    location: pick('locationName', 'location', 'Title'), notes: pick('notes'), durationUnit: 'seconds', depthUnit: 'm', temperatureUnit: 'C',
+    entryLatitude: pick('entryLatitude', 'startLatitude'), entryLongitude: pick('entryLongitude', 'startLongitude'),
+    exitLatitude: pick('exitLatitude', 'endLatitude'), exitLongitude: pick('exitLongitude', 'endLongitude'), latitude: pick('latitude'), longitude: pick('longitude') };
 }
 export function parseTimestamp(raw: string, offset: number): string {
   const value = raw.trim().replace(' ', 'T');
@@ -55,7 +57,7 @@ export function parseCsv(text: string, mapping: CsvMapping, offset: number): { d
   if (!headers?.length || !rows.length) throw new Error('CSV has no data rows.');
   if (new Set(headers).size !== headers.length) throw new Error('CSV contains duplicate column names.');
   if (!mapping.start || !headers.includes(mapping.start)) throw new Error('Choose a valid start time column.');
-  for (const key of ['id', 'duration', 'depth', 'temperature', 'location', 'notes'] as const) {
+  for (const key of ['id', 'duration', 'depth', 'temperature', 'location', 'notes', 'entryLatitude', 'entryLongitude', 'exitLatitude', 'exitLongitude', 'latitude', 'longitude'] as const) {
     if (mapping[key] && !headers.includes(mapping[key]!)) throw new Error(`Column not found: ${mapping[key]}`);
   }
   const dives: ImportedDive[] = [], errors: string[] = [];
@@ -70,10 +72,14 @@ export function parseCsv(text: string, mapping: CsvMapping, offset: number): { d
       const durationSec = duration(read(mapping.duration), mapping.durationUnit);
       if (depth !== undefined && depth < 0) throw new Error('Depth cannot be negative.');
       if (durationSec !== undefined && durationSec <= 0) throw new Error('Duration must be greater than zero.');
-      dives.push({ diveKind: /apnea|free.?div/i.test(activity || '') ? 'freedive' : /ccr|closed.?circuit/i.test(activity || '') ? 'ccr' : 'scuba', startTime: parseTimestamp(read(mapping.start), offset), sourceId: read(mapping.id) || undefined,
+      dives.push({ diveKind: /apnea|free.?div/i.test(activity || '') ? 'freedive' : /ccr|closed.?circuit/i.test(activity || '') ? 'ccr' : 'scuba', recordedStartTime: read(mapping.start), sourceLocalTime: /(?:Z|[+-]\d{2}:?\d{2})$/i.test(read(mapping.start).trim()) ? undefined : read(mapping.start).trim().replace(' ', 'T'), startTime: parseTimestamp(read(mapping.start), offset), sourceId: read(mapping.id) || undefined,
         durationSec, maxDepthM: depth === undefined ? undefined : depth * (mapping.depthUnit === 'ft' ? 0.3048 : 1),
         waterTempC: temp === undefined ? undefined : mapping.temperatureUnit === 'F' ? (temp - 32) * 5 / 9 : temp,
-        locationName: read(mapping.location) || undefined, notes: read(mapping.notes) || undefined });
+        locationName: read(mapping.location) || undefined, notes: read(mapping.notes) || undefined,
+        garminStats: Object.fromEntries((['entryLatitude', 'entryLongitude', 'exitLatitude', 'exitLongitude', 'latitude', 'longitude'] as const).flatMap(key => {
+          const raw = read(mapping[key]).trim(), value = Number(raw);
+          return raw && Number.isFinite(value) ? [[key, value]] : [];
+        })) });
     } catch (e) { errors.push(`Row ${index + 2}: ${e instanceof Error ? e.message : String(e)}`); }
   });
   return { dives, errors };

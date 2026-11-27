@@ -21,7 +21,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
   }
 }
 
-rootProject.name = 'Dive Log Transfer'
+rootProject.name = 'Garmin to MySSI'
 
 dependencyResolutionManagement {
   versionCatalogs {

@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Dive Log Transfer",
+    "name": "Garmin to MySSI",
     "slug": "garmin-to-myssi",
-    "version": "0.4.1",
+    "version": "0.4.2",
     "scheme": "divelogtransfer",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.divelogtransfer.app",
-      "versionCode": 5,
+      "versionCode": 6,
       "permissions": [
         "android.permission.INTERNET"
       ],

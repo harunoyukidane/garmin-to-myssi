@@ -4,6 +4,7 @@ $projectDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $androidDirectory = Join-Path $projectDirectory 'android'
 $releaseVersion = (Get-Content -LiteralPath (Join-Path $projectDirectory 'package.json') -Raw | ConvertFrom-Json).version
 $releaseCode = (Get-Content -LiteralPath (Join-Path $projectDirectory 'app.json') -Raw | ConvertFrom-Json).expo.android.versionCode
+$releaseName = (Get-Content -LiteralPath (Join-Path $projectDirectory 'app.json') -Raw | ConvertFrom-Json).expo.name
 $keyPath = Join-Path $androidDirectory 'release.keystore'
 $signingPath = Join-Path $androidDirectory 'signing.properties'
 if (-not (Test-Path -LiteralPath $signingPath)) {
@@ -56,7 +57,8 @@ if (-not ($permissions -match 'android.permission.INTERNET')) { throw 'Release A
 $badging = & (Join-Path $buildToolsDirectory 'aapt.exe') dump badging $apkPath
 if ($LASTEXITCODE -ne 0 -or -not ($badging -match "package: name='com.divelogtransfer.app'")) { throw 'Unexpected APK package.' }
 if (-not ($badging -match "versionName='$([regex]::Escape($releaseVersion))'") -or -not ($badging -match "versionCode='$releaseCode'")) { throw 'APK version does not match the release configuration.' }
-$badging | Select-String -Pattern '^package:','^sdkVersion:','^targetSdkVersion:','^native-code:'
+if (-not ($badging -contains "application-label:'$releaseName'")) { throw 'APK display name does not match the app configuration.' }
+$badging | Select-String -Pattern '^package:','^application-label:','^sdkVersion:','^targetSdkVersion:','^native-code:'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::OpenRead($apkPath)
 try {
@@ -65,7 +67,7 @@ try {
 } finally { $archive.Dispose() }
 $outputDirectory = Join-Path $projectDirectory 'dist'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
-$deliverable = Join-Path $outputDirectory "DiveLogTransfer-$releaseVersion.apk"
+$deliverable = Join-Path $outputDirectory "GarminToMySSI-$releaseVersion.apk"
 Copy-Item -LiteralPath $apkPath -Destination $deliverable -Force
 $hash = (Get-FileHash -LiteralPath $deliverable -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath ($deliverable + '.sha256') -Value "$hash  $([System.IO.Path]::GetFileName($deliverable))"

@@ -1,6 +1,6 @@
 # Garmin to MySSI
 
-An Android app that turns Garmin dive logs into QR images you can import into MySSI. The installed app is currently named **Dive Log Transfer**.
+An Android app that turns Garmin dive logs into QR images you can import into MySSI.
 
 Import and review dives, correct measurements, and export QR images offline. Optional Garmin sync, nearby place names, time zones, and historical air temperatures use the internet.
 
@@ -50,7 +50,9 @@ For an Android APK on Windows, install PowerShell 7, JDK 17, and the Android SDK
 npm run build:android
 ```
 
-The APK and SHA-256 checksum are written to `dist/`. The release APK includes its JavaScript and does not need Metro. Keep private backups of `android/release.keystore` and `android/signing.properties`: updates require the same signing key. These files are ignored by Git.
+The APK and SHA-256 checksum are written to `dist/` as `GarminToMySSI-<version>.apk` and its `.sha256` file. The release APK includes its JavaScript and does not need Metro. Keep private backups of `android/release.keystore` and `android/signing.properties`: updates require the same signing key. These files are ignored by Git.
+
+Version 0.4.2 renames the app to **Garmin to MySSI**. Install it over the existing release-signed Dive Log Transfer app to keep trips, imports, corrections, and saved credentials. The package ID and storage identifiers are unchanged. Existing and new QR images continue to use the **Dive Log Transfer** gallery album. Do not uninstall or clear app data before upgrading.
 
 For development, use `npm start`. Check Android bundling with `npm run bundle:android`. If your network uses Windows-managed certificate authorities, build with `npm run build:android -- -UseWindowsTrustStore`.
 

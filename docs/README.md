@@ -8,6 +8,7 @@ Keep public project documentation in this folder so instructions and licensing n
 - [Lookup configuration](enrichment.md): geographic names, historical weather, and optional Google proxy configuration.
 - [Licensing](licensing.md): PolyForm Noncommercial and separate dependency obligations.
 - [Credentials and Git history](public-release.md): credential handling and history-cleanup procedure.
+- [Version 0.4.2](release-0.4.2.md): app rename and instructions for preserving data during an upgrade.
 
 ## Contributor references
 

@@ -12,8 +12,8 @@ Deleting a file or branch does not erase credentials from earlier commits. Rotat
 2. Install `git-filter-repo` version 2.47 or newer. Create a fresh clone, separate from your working repository:
 
    ```powershell
-   git clone https://github.com/harunoyukidane/dive-log-transfer.git dive-log-transfer-clean
-   Set-Location dive-log-transfer-clean
+   git clone https://github.com/harunoyukidane/garmin-to-myssi.git garmin-to-myssi-clean
+   Set-Location garmin-to-myssi-clean
    ```
 
 3. In a local file outside the clone, create one replacement per line, such as `literal:OLD_VALUE==>REMOVED`. Include every exposed credential and any personal username you want removed. Do not commit or share this file. Replace the example path below with its absolute path. For whole private files, include all historical paths in the same filtering command:

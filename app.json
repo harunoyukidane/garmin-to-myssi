@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Dive Log Transfer",
-    "slug": "dive-log-transfer",
+    "slug": "garmin-to-myssi",
     "version": "0.4.1",
     "scheme": "divelogtransfer",
     "orientation": "portrait",

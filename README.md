@@ -6,6 +6,8 @@ Import and review dives, correct measurements, and export QR images offline. Opt
 
 This is an independent community project, unaffiliated with Garmin or SSI.
 
+Repository: [harunoyukidane/garmin-to-myssi](https://github.com/harunoyukidane/garmin-to-myssi). Setup, provider configuration, and licensing details are indexed in [docs/](docs/README.md).
+
 ## Get started
 
 1. Install an APK from this repository's [Releases](../../releases), if available, or build it using the instructions below. Android 7.0 or newer is required.

@@ -1,30 +1,29 @@
 # Licensing
 
-## Recommendation
+## Project license
 
-MIT is a simple choice for the original application code if the owner wants to permit use, modification, redistribution, and commercial reuse while requiring preservation of the copyright and license notice. Apache-2.0 is another permissive option with an explicit contributor patent grant and additional notice/change requirements.
+The original code in this repository is licensed under the [PolyForm Noncommercial License 1.0.0](../LICENSE). The complete, unmodified license text is in the root `LICENSE` file. The SPDX identifier in `package.json` and the root package entry of `package-lock.json` is `PolyForm-Noncommercial-1.0.0`.
 
-No license has been selected or applied yet. Making a repository public does not itself grant a general right to reuse its code.
+This is a source-available project. The license permits use, modification, and redistribution for permitted noncommercial purposes. Personal hobby use is covered, and the license also expressly permits use by the organizations listed in its Noncommercial Organizations section, including educational institutions, charities, and government institutions. It is broader than individual personal use only.
 
-## How to add the chosen license
+Commercial use outside the license's permitted purposes requires separate permission from the relevant copyright holders. Do not assume a use is permitted merely because the software is provided free of charge. Consult the full license for its definitions and permissions.
 
-1. Confirm ownership of the original code and permission from any other copyright holders.
-2. Add the complete standard license text in a root `LICENSE` file. For MIT, fill in the copyright year and the copyright holder's chosen name.
-3. Set the SPDX identifier, such as `"license": "MIT"`, in `package.json` and the root package entry of `package-lock.json`.
-4. Update the README to state the license and link to `LICENSE`.
-5. Preserve third-party notices and attribution. Review a dependency notice inventory for the actual release, including native libraries, fonts and assets. The project license covers only code the owner can license.
+## Sharing copies and modifications
+
+When distributing original or modified copies for a permitted purpose, include the license text or its official URL, along with any `Required Notice:` lines supplied by the licensor. Preserve third-party copyright and license notices. The license also contains patent, violation/cure, and warranty/liability provisions; this summary does not replace its terms.
+
+The project license applies only to original material the project copyright holders can license. It does not relicense dependencies, third-party assets, or external data. Review a dependency notice inventory for the actual release, including native libraries, fonts, and assets.
 
 ## Garmin FIT SDK
 
 The installed `@garmin/fitsdk` version 21.218.0 declares `SEE LICENSE IN LICENSE.txt`. Its FIT Protocol License Agreement grants a limited, non-sublicensable license and includes restrictions on redistribution and on making Garmin technology subject to source-disclosure or modification-right requirements (sections 1 and 2(c)–(d)). It is not an MIT-licensed dependency.
 
-The app includes Garmin's license text in `shared/fitLicense.ts`; preserve it. MIT or Apache for the original app code does not relicense the SDK or establish permission to distribute it inside an APK. Confirm applicable terms and obtain Garmin clarification/permission if needed before public binary distribution. GPL would require particular compatibility review given these restrictions and is not the default recommendation here.
+The app includes Garmin's license text in `shared/fitLicense.ts`; preserve it. PolyForm Noncommercial for the original app code does not relicense the SDK or establish permission to distribute it inside an APK. Confirm applicable terms and obtain Garmin clarification/permission if needed before public binary distribution. Preserve the SDK's own license when reviewing release obligations.
 
 Data services also have separate attribution and usage terms. Keep OpenStreetMap, GeoNames, Open-Meteo and optional Google attribution and terms.
 
 ## References
 
-- [MIT terms and instructions](https://choosealicense.com/licenses/mit/)
-- [Apache-2.0 terms](https://choosealicense.com/licenses/apache-2.0/)
+- [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
 - [Garmin SDK license](https://github.com/garmin/fit-javascript-sdk/blob/main/LICENSE.txt) — also inspect the license shipped with the pinned installed version.
 - [GitHub licensing instructions](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)

@@ -56,6 +56,6 @@ For development, use `npm start`. Check Android bundling with `npm run bundle:an
 
 Geographic data: [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL), [GeoNames](https://www.geonames.org/) (CC BY 4.0). Weather and time-zone services: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0).
 
-This repository does not yet grant an open-source license for its original code. Dependencies retain their own licenses; Garmin's FIT SDK has separate terms. See [licensing guidance](docs/licensing.md) before distributing a build.
+Original project code is available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify, and share it for permitted noncommercial purposes under those terms. Commercial use requires separate permission from the copyright holders. This is source-available software. Dependencies retain their own licenses; Garmin's FIT SDK has separate terms. See [licensing details](docs/licensing.md) before distributing a build.
 
 More detail: [lookup configuration](docs/enrichment.md), [Garmin sync validation](docs/garmin-sync-validation.md), and [credentials and history cleanup](docs/public-release.md).

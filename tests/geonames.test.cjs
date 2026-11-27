@@ -1,5 +1,20 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const Module = require('node:module');
+const originalLoad = Module._load;
+let savedUsername, rejectStore = false;
+Module._load = function(name, ...args) {
+  if (name === 'expo-secure-store') return {
+    WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'unlocked',
+    getItemAsync: async () => savedUsername,
+    setItemAsync: async (_, value) => { if (rejectStore) throw Error('Storage failed'); savedUsername = value; },
+    deleteItemAsync: async () => { savedUsername = undefined; }
+  };
+  return originalLoad.call(this, name, ...args);
+};
+const { getGeoNamesUsername, saveGeoNamesUsername } = require('../src/services/geoNamesSettings.ts');
+const { providers } = require('../src/services/enrichment.ts');
+Module._load = originalLoad;
 const { geoNamesCandidates } = require('../shared/geonames.ts');
 const { enrichTrip, applyEnrichment } = require('../shared/enrichment.ts');
 const { effective } = require('../shared/domain.ts');
@@ -54,14 +69,32 @@ test('GeoNames service sends account, feature filters and HTTPS, caches successf
   global.fetch = async url => {
     calls++; const parsed = new URL(url);
     assert.equal(parsed.origin, 'https://secure.geonames.org');
-    assert.equal(parsed.searchParams.get('username'), process.env.EXPO_PUBLIC_GEONAMES_USERNAME || 'geonames-user');
+    assert.equal(parsed.searchParams.get('username'), savedUsername);
     assert.ok(parsed.searchParams.getAll('featureCode').includes('RFC'));
     return Response.json({ geonames: [island] });
   };
   try {
-    const { providers } = require('../src/services/enrichment.ts');
+    await saveGeoNamesUsername(' test-user ');
     assert.equal((await providers.geographicNames(point))[0].name, 'Pulau Rengis');
     await providers.geographicNames(point);
     assert.equal(calls, 1);
+    await saveGeoNamesUsername('another-user');
+    await providers.geographicNames(point);
+    assert.equal(calls, 2, 'Changing accounts must not reuse another account cache');
+    await saveGeoNamesUsername('');
+    assert.deepEqual(await providers.geographicNames(point), []);
+    assert.equal(calls, 2, 'Disabled GeoNames must not make requests or return cached names');
   } finally { global.fetch = original; }
+});
+
+test('GeoNames settings trim, persist, clear, and preserve saved value on failure', async () => {
+  await saveGeoNamesUsername(' saved-user ');
+  assert.equal(await getGeoNamesUsername(), 'saved-user');
+  await assert.rejects(saveGeoNamesUsername('invalid user'), /valid GeoNames/);
+  rejectStore = true;
+  try { await assert.rejects(saveGeoNamesUsername('replacement'), /Storage failed/); }
+  finally { rejectStore = false; }
+  assert.equal(await getGeoNamesUsername(), 'saved-user');
+  await saveGeoNamesUsername('  ');
+  assert.equal(await getGeoNamesUsername(), '');
 });

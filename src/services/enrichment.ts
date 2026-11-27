@@ -1,6 +1,7 @@
 import { Coordinates, Enrichment, Trip } from '../../shared/model';
 import { enrichTrip, EnrichmentProviders } from '../../shared/enrichment';
 import { geoNamesCandidates, geoNamesFeatures } from '../../shared/geonames';
+import { getGeoNamesUsername } from './geoNamesSettings';
 
 const cache = new Map<string, { expires: number; value: unknown }>();
 const inflight = new Map<string, Promise<unknown>>();
@@ -28,13 +29,15 @@ export async function searchDestinations(name: string): Promise<Array<Coordinate
   return (data.results || []).map((p: any) => ({ latitude: p.latitude, longitude: p.longitude, name: [p.name, p.admin1, p.country].filter(Boolean).join(', '), timeZone: p.timezone }));
 }
 export const providers: EnrichmentProviders = {
-  geographicNames: p => cached(`geonames:${pointKey(p)}`, async () => {
-    // This personal build uses the user's public GeoNames account name, not a password.
-    const username = process.env.EXPO_PUBLIC_GEONAMES_USERNAME || 'geonames-user';
-    const features = Object.keys(geoNamesFeatures).map(code => `featureCode=${code}`).join('&');
-    const data = await json(`https://secure.geonames.org/findNearbyJSON?lat=${p.latitude}&lng=${p.longitude}&radius=15&maxRows=40&${features}&username=${encodeURIComponent(username)}`);
-    return geoNamesCandidates(p, data);
-  }),
+  geographicNames: async p => {
+    const username = await getGeoNamesUsername();
+    if (!username) return [];
+    return cached(`geonames:${username}:${pointKey(p)}`, async () => {
+      const features = Object.keys(geoNamesFeatures).map(code => `featureCode=${code}`).join('&');
+      const data = await json(`https://secure.geonames.org/findNearbyJSON?lat=${p.latitude}&lng=${p.longitude}&radius=15&maxRows=40&${features}&username=${encodeURIComponent(username)}`);
+      return geoNamesCandidates(p, data);
+    });
+  },
   destination: name => cached(`destination:${name}`, async () => {
     const results = await searchDestinations(name);
     // Avoid silently choosing between equally named destinations.

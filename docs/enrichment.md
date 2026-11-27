@@ -2,7 +2,7 @@
 
 ## GeoNames automatic location lookup (0.4.1)
 
-GeoNames is the first geographic-name lookup. This personal APK uses the public account name `geonames-user`; builds can override it with `EXPO_PUBLIC_GEONAMES_USERNAME`. No password is stored. Requests use HTTPS, filter to coastal geographic features, and cache successful responses for one day in memory. Resolved names persist with trip data for offline use. GeoNames attribution (CC BY 4.0) appears on the trip screen.
+GeoNames is an optional first geographic-name lookup. Enter your own username in Garmin & GeoNames settings and enable free web services in your GeoNames account. The username is stored in Expo SecureStore on this phone; no account is embedded in source or the app bundle. Leaving the field blank disables GeoNames and uses OSM. Requests use HTTPS, filter to coastal geographic features, and cache successful responses per account for one day in memory. Existing resolved names persist with trip data for offline use; changing the account applies to new lookups. GeoNames attribution (CC BY 4.0) appears on the trip screen.
 
 Entry GPS remains preferred over exit GPS. Candidates are checked against the actual coordinates, with a 2 km limit for specific features and 15 km for broader areas. Hotels and businesses are excluded. Missing-GPS dives use only broad areas from nearby dives. Ambiguous/failed GeoNames lookups fall back to OSM and retain editable candidates. A clear GeoNames result skips Overpass, avoiding its delays. Manual corrections always take precedence.
 

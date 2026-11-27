@@ -10,11 +10,14 @@ import { garminKeyUrl } from '../../shared/garminApi';
 import { offsetLabel } from '../../shared/domain';
 import { syncTrip } from '../services/garminSync';
 import { SyncStorageError } from '../../shared/garminSync';
+import { getGeoNamesUsername, saveGeoNamesUsername } from '../services/geoNamesSettings';
 
 export function GarminConnectionScreen({ navigation, route }: NativeStackScreenProps<RootStackParamList, 'GarminConnection'>) {
   const { busy, run } = useTrips();
   const [key, setKey] = useState(''), [account, setAccount] = useState(''), [message, setMessage] = useState('');
   const controller = useRef<AbortController>();
+  const [username, setUsername] = useState(''), [settingsLoaded, setSettingsLoaded] = useState(false);
+  useEffect(() => { getGeoNamesUsername().then(value => { setUsername(value); setSettingsLoaded(true); }).catch(() => setMessage('GeoNames settings could not be opened. Reopen this screen to retry.')); }, []);
   useEffect(() => { getGarminConnection().then(c => setAccount(c?.accountId || '')).catch(() => setMessage('Saved connection could not be opened. Replace the key.')); return () => controller.current?.abort(); }, []);
   return <Screen><Text style={{ fontSize: 25, fontWeight: '800' }}>Garmin connection</Text>
     <Text>{account ? `Connected · account ${account}` : 'No Garmin account connected'}</Text>
@@ -31,6 +34,13 @@ export function GarminConnectionScreen({ navigation, route }: NativeStackScreenP
     {busy && <PrimaryButton label="Cancel connection" onPress={() => controller.current?.abort()} />}
     <PrimaryButton label="Disconnect Garmin" disabled={busy || !account} onPress={() => run(async () => { await disconnectGarmin(); setAccount(''); setKey(''); setMessage('Local Garmin credentials removed. Imported dives are kept.'); })} />
     <Text>Disconnect removes credentials from this phone. To revoke access at Garmin, delete the key in Garmin Connect.</Text>
+    <Text style={{ fontSize: 21, fontWeight: '700' }}>GeoNames</Text>
+    <Text>Optional username for nearby geographic names. Enable free web services in your GeoNames account. Leave blank to use OpenStreetMap. Saved on this phone only.</Text>
+    <TextInput accessibilityLabel="GeoNames username" placeholder="GeoNames username" autoCapitalize="none" autoCorrect={false} editable={!busy && settingsLoaded} value={username} onChangeText={setUsername} style={{ borderWidth: 1, borderColor: '#94A3B8', borderRadius: 8, padding: 12, color: '#0F172A', backgroundColor: '#FFFFFF' }} />
+    <PrimaryButton label="Save GeoNames settings" disabled={busy || !settingsLoaded} onPress={() => run(async () => {
+      await saveGeoNamesUsername(username); setUsername(username.trim());
+      setMessage(username.trim() ? 'GeoNames username saved. New lookups will use this account.' : 'GeoNames disabled. New lookups will use OpenStreetMap.');
+    })} />
     {!!message && <Text accessibilityLiveRegion="polite">{message}</Text>}
   </Screen>;
 }

@@ -47,7 +47,7 @@ export function TripsScreen({ navigation }: Props<'Trips'>) {
   return <Screen><Text style={styles.title}>Your dive trips</Text>
     <Copy>Import Garmin files and turn dives into MySSI QR codes. Imports and corrections stay on this phone. Online lookups use dive coordinates and timestamps.</Copy>
     <PrimaryButton label="Create trip" disabled={busy} onPress={() => navigation.navigate('TripSetup')} />
-    <PrimaryButton label={`Garmin Connection: ${connected ? 'Connected' : 'Disconnected'}`} disabled={busy} onPress={() => navigation.navigate('GarminConnection')} />
+    <PrimaryButton label={`Garmin & GeoNames settings: ${connected ? 'Connected' : 'Disconnected'}`} disabled={busy} onPress={() => navigation.navigate('GarminConnection')} />
     <PrimaryButton label="Global SSI QR Settings" disabled={busy} onPress={() => navigation.navigate('SsiSettings')} />
     {!data.trips.length && <Copy>No trips yet. Create one, then select Garmin CSV or FIT files from your phone.</Copy>}
     {[...data.trips].reverse().map(trip => <View key={trip.id} style={styles.card}>

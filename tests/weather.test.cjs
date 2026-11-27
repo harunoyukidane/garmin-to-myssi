@@ -125,9 +125,19 @@ test('provider failures keep dives usable and destination fallback is only used 
   await enrichTrip(t, providers); assert.equal(destinationCalls, 1);
 });
 
+function nativeProviders() {
+  const Module = require('node:module'), originalLoad = Module._load;
+  Module._load = function(name, ...args) {
+    if (name === 'expo-secure-store') return { getItemAsync: async () => null };
+    return originalLoad.call(this, name, ...args);
+  };
+  try { return require('../src/services/enrichment.ts').providers; }
+  finally { Module._load = originalLoad; }
+}
+
 test('weather service requests historical dates with UTC epoch hours and uses no phone-location API', async () => {
   const original = global.fetch;
-  const { providers } = require('../src/services/enrichment.ts');
+  const providers = nativeProviders();
   const urls = [];
   global.fetch = async url => { urls.push(url); return Response.json({ timezone: 'Asia/Singapore', hourly_units: { temperature_2m: '\u00b0C' }, hourly: { time: [], temperature_2m: [] } }); };
   try {
@@ -141,7 +151,7 @@ test('weather service requests historical dates with UTC epoch hours and uses no
 
 test('location lookup identifies the app and falls back after an upstream server error', async () => {
   const original = global.fetch, calls = [];
-  const { providers } = require('../src/services/enrichment.ts');
+  const providers = nativeProviders();
   global.fetch = async (url, init) => {
     calls.push(url);
     assert.match(init.headers['User-Agent'], /DiveLogTransfer/);

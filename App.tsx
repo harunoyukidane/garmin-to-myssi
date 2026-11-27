@@ -12,7 +12,7 @@ export default function App() {
   return <SafeAreaProvider><TripProvider><NavigationContainer><Stack.Navigator initialRouteName="Trips">
     <Stack.Screen name="Trips" component={TripsScreen} options={{ title: 'Dive Log Transfer' }} />
     <Stack.Screen name="SsiSettings" component={SsiSettingsScreen} options={{ title: 'Global SSI QR Settings' }} />
-    <Stack.Screen name="GarminConnection" component={GarminConnectionScreen} options={{ title: 'Garmin connection' }} />
+    <Stack.Screen name="GarminConnection" component={GarminConnectionScreen} options={{ title: 'Garmin & GeoNames settings' }} />
     <Stack.Screen name="GarminSync" component={GarminSyncScreen} options={{ title: 'Sync Garmin' }} />
     <Stack.Screen name="TripSetup" component={TripSetupScreen} options={{ title: 'Trip settings' }} />
     <Stack.Screen name="DiveList" component={DiveListScreen} options={{ title: 'Trip dives' }} />

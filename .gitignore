@@ -14,3 +14,14 @@ expo-start.err.log
 android/release.keystore
 android/signing.properties
 .android-tmp/
+
+# Local credentials and private signing material
+*.jks
+*.keystore
+!android/app/debug.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+credentials.json
+secrets/
